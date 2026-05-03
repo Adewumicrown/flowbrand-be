@@ -1,0 +1,141 @@
+import { Controller, Get, Post, Body, Param, Delete, HttpCode, HttpStatus, UseGuards, Query } from '@nestjs/common';
+import { NewsletterSubscriptionService } from './newsletter-subscription.service';
+import { CreateNewsletterSubscriptionDto } from './dto/create-newsletter-subscription.dto';
+import { skipAuth } from '@shared/helpers/skipAuth';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { NewsletterSubscriptionResponseDto } from './dto/newsletter-subscription.response.dto';
+import { SuperAdminGuard } from '@guards/super-admin.guard';
+import { UnsubscribeNewsletterDto } from './dto/unsubscribe-newsletter.dto';
+import { ResubscribeNewsletterDto } from './dto/resubscribe-newsletter.dto';
+
+@ApiTags('Newsletter Subscription')
+@Controller('newsletter-subscription')
+export class NewsletterSubscriptionController {
+  constructor(private readonly newsletterSubscriptionService: NewsletterSubscriptionService) {}
+
+  @skipAuth()
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Subscribe to newsletter' })
+  @ApiResponse({ status: 201, description: 'Subscriber subscription successful.' })
+  create(@Body() createNewsletterDto: CreateNewsletterSubscriptionDto) {
+    return this.newsletterSubscriptionService.newsletterSubscription(createNewsletterDto);
+  }
+
+  @skipAuth()
+  @Post('resubscribe')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Resubscribe to the newsletter' })
+  @ApiResponse({ status: 200, description: 'User successfully resubscribed.' })
+  @ApiResponse({ status: 400, description: 'User is already subscribed.' })
+  @ApiResponse({ status: 404, description: 'User not found or not unsubscribed.' })
+  resubscribe(@Body() resubscribeDto: ResubscribeNewsletterDto) {
+    return this.newsletterSubscriptionService.resubscribe(resubscribeDto);
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(SuperAdminGuard)
+  @Get()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Fetch all subscribers to newsletter' })
+  @ApiResponse({
+    status: 200,
+    description: 'Return all team members',
+    schema: {
+      properties: {
+        status: { type: 'string' },
+        message: { type: 'string' },
+        data: {
+          type: 'array',
+          items: { $ref: '#/components/schemas/NewsletterSubscriptionResponseDto' },
+        },
+        meta: {
+          type: 'object',
+          properties: {
+            total: { type: 'number' },
+            page: { type: 'number' },
+            limit: { type: 'number' },
+            totalPages: { type: 'number' },
+          },
+        },
+      },
+    },
+  })
+  async getAllSubscribers(
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 10
+  ): Promise<{ message: string; data: NewsletterSubscriptionResponseDto[]; meta: any }> {
+    const { subscribers, total } = await this.newsletterSubscriptionService.findAllSubscribers(page, limit);
+    return {
+      message: 'Subscribers list fetched successfully',
+      data: subscribers,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(SuperAdminGuard)
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @ApiParam({ name: 'id', required: true, description: 'ID of the subscriber to be deleted' })
+  @ApiOperation({ summary: 'Remove subscriber from newsletter' })
+  @ApiResponse({ status: 200, description: 'Subscriber with ID {id} has been soft deleted' })
+  @ApiResponse({ status: 404, description: 'Subscriber with ID ${id} not found' })
+  removeSubscriber(@Param('id') id: string) {
+    return this.newsletterSubscriptionService.removeSubscriber(id);
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(SuperAdminGuard)
+  @Get('deleted')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Fetch all deleted subscribers' })
+  @ApiResponse({
+    status: 200,
+    description: 'Return all team members',
+    schema: {
+      properties: {
+        status: { type: 'string' },
+        message: { type: 'string' },
+        data: {
+          type: 'array',
+          items: { $ref: '#/components/schemas/NewsletterSubscriptionResponseDto' },
+        },
+      },
+    },
+  })
+  async findSoftDeleted(): Promise<{ message: string; data: NewsletterSubscriptionResponseDto[] }> {
+    const deletedSubscribers = await this.newsletterSubscriptionService.findSoftDeleted();
+
+    return {
+      message: 'Deleted subscribers list fetched successfully',
+      data: deletedSubscribers,
+    };
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(SuperAdminGuard)
+  @Post('restore/:id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Fetch all deleted subscribers' })
+  @ApiResponse({ status: 200, description: 'Subscriber with ID {id} has been restored' })
+  @ApiResponse({ status: 404, description: 'Subscriber with ID ${id} not found or already restored' })
+  restore(@Param('id') id: string) {
+    return this.newsletterSubscriptionService.restore(id);
+  }
+
+  @Post('unsubscribe')
+  @skipAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Unsubscribe from the newsletter' })
+  @ApiResponse({ status: 200, description: 'User has been unsubscribed successfully.' })
+  @ApiResponse({ status: 404, description: 'Email not found' })
+  unsubscribe(@Body() unsubscribeDto: UnsubscribeNewsletterDto) {
+    return this.newsletterSubscriptionService.unsubscribe(unsubscribeDto.email);
+  }
+}
