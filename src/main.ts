@@ -8,7 +8,6 @@ import { Logger } from 'nestjs-pino';
 import { DataSource } from 'typeorm';
 import { AppModule } from './app.module';
 import { initializeDataSource } from '@database/data-source';
-import { SeedingService } from '@database/seeding/seeding.service';
 import { ResponseInterceptor } from '@shared/inteceptors/response.interceptor';
 import { Request, Response } from 'express';
 import { HttpExceptionFilter } from '@shared/helpers/http-exception-filter';
@@ -26,9 +25,6 @@ async function bootstrap() {
     console.error('Error during Data Source initialization', err);
     process.exit(1);
   }
-
-  const seedingService = app.get(SeedingService);
-  await seedingService.seedDatabase();
 
   app.enable('trust proxy');
   app.useLogger(logger);

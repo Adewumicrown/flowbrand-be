@@ -1,5 +1,5 @@
 import { UserPayload } from '../user/interfaces/user-payload.interface';
-import { Body, Controller, Param, Patch, Req, Request, Delete, Get, Query, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Param, Patch, Req, Delete, Get, Query, Post, UseGuards } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { MarkNotificationAsReadDto } from './dtos/mark-notification-as-read.dto';
 import { CreateNotificationResponseDto } from './dtos/create-notification-response.dto';
@@ -24,6 +24,7 @@ import { MarkAllNotificationAsReadError } from './dtos/mark-all-notifications-as
 import { CreateNotificationForAllUsersDto } from './dtos/create-notifiction-all-users.dto';
 import { CreateNotificationForAllUsersResDto } from './dtos/create-notification-all-users-res.dto';
 import { SuperAdminGuard } from '@guards/super-admin.guard';
+import { Request } from 'express';
 
 @ApiBearerAuth()
 @ApiTags('Notifications')
@@ -83,35 +84,17 @@ export class NotificationsController {
     };
   }
 
-  @Patch('/:notificationId')
-  @ApiBody({ type: MarkNotificationAsReadDto, description: 'Read status of the notification' })
-  @ApiOkResponse({ type: CreateNotificationResponseDto, description: 'Notification marked as read successfully' })
-  @ApiUnauthorizedResponse({ type: MarkNotificationAsReadErrorDto, description: 'Unauthorized' })
-  @ApiBadRequestResponse({ type: MarkNotificationAsReadErrorDto, description: 'Bad Request' })
-  @ApiInternalServerErrorResponse({ type: MarkNotificationAsReadErrorDto, description: 'Internal Server Error' })
-  @ApiOperation({ summary: 'Marks a single notification as read' })
-  async markNotificationAsRead(
-    @Param('notificationId') notification_id: string,
-    @Body() markNotificationAsRead: MarkNotificationAsReadDto,
-    @Req() request: Request
-  ) {
-    const user = request['user'];
-
-    const userId = user.id;
-    return this.notificationsService.markNotificationAsRead(markNotificationAsRead, notification_id, userId);
-  }
-
   @Delete('/clear')
   @ApiOkResponse({ type: MarkAllNotificationAsReadResponse, description: 'Notifications cleared successfully.' })
   @ApiUnauthorizedResponse({ type: MarkAllNotificationAsReadError, description: 'Unauthorized' })
   @ApiInternalServerErrorResponse({ type: MarkAllNotificationAsReadError, description: 'Internal Server Error' })
   @ApiOperation({ summary: 'Marks all notifications a read' })
   async markAllNotificationsAsRead(@Req() request: Request) {
-    const user = request['user'];
+    const user = request['user'] as any;
 
     const userId = user.id;
 
-    return this.notificationsService.markAllNotificationsAsReadForUser(userId);
+    return;
   }
 
   @Get('/unread')

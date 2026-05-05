@@ -12,17 +12,8 @@ import {
   OneToOne,
 } from 'typeorm';
 import { AbstractBaseEntity } from '../../../entities/base.entity';
-import { Job } from '../../../modules/jobs/entities/job.entity';
-import { NotificationSettings } from '../../../modules/notification-settings/entities/notification-setting.entity';
 import { Notification } from '../../../modules/notifications/entities/notifications.entity';
-import { Testimonial } from '../../../modules/testimonials/entities/testimonials.entity';
-import { Blog } from '../../blogs/entities/blog.entity';
-import { Comment } from '../../comments/entities/comments.entity';
-import { Cart } from '../../dashboard/entities/cart.entity';
-import { Order } from '../../dashboard/entities/order.entity';
-import { Organisation } from '../../organisations/entities/organisations.entity';
 import { Profile } from '../../profile/entities/profile.entity';
-import { Language } from '@modules/languages/entities/language.entity';
 
 export enum UserType {
   SUPER_ADMIN = 'super-admin',
@@ -74,25 +65,9 @@ export class User extends AbstractBaseEntity {
   @DeleteDateColumn({ nullable: true })
   deletedAt?: Date;
 
-  @OneToMany(() => Organisation, organisation => organisation.owner)
-  owned_organisations: Organisation[];
-
-  @ManyToMany(() => Organisation, organisation => organisation.members)
-  @JoinTable()
-  organisations: Organisation[];
-
-  @OneToMany(() => Job, job => job.user)
-  jobs: Job[];
-
   @OneToOne(() => Profile, profile => profile.id)
   @JoinColumn({ name: 'profile_id' })
   profile: Profile;
-
-  @OneToMany(() => Testimonial, testimonial => testimonial.user)
-  testimonials: Testimonial[];
-
-  @OneToMany(() => Blog, blog => blog.author)
-  blogs?: Blog[];
 
   @BeforeInsert()
   @BeforeUpdate()
@@ -102,20 +77,4 @@ export class User extends AbstractBaseEntity {
 
   @OneToMany(() => Notification, notification => notification.user)
   notifications: Notification[];
-
-  @OneToOne(() => NotificationSettings, notification_settings => notification_settings.user)
-  notification_settings: NotificationSettings[];
-
-  @OneToMany(() => Comment, comment => comment.user)
-  comments?: Comment[];
-
-  @OneToMany(() => Order, order => order.user)
-  orders?: Order[];
-
-  @OneToMany(() => Cart, cart => cart.user)
-  cart: Cart[];
-
-  @ManyToMany(() => Language, language => language.users)
-  @JoinTable()
-  languages?: Language[];
 }

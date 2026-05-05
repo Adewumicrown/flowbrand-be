@@ -9,16 +9,13 @@ import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handleba
 import { EmailController } from './email.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from '@modules/user/entities/user.entity';
-import { Organisation } from '@modules/organisations/entities/organisations.entity';
-import { OrganisationUserRole } from '@modules/role/entities/organisation-user-role.entity';
 import { Profile } from '@modules/profile/entities/profile.entity';
-import { Role } from '@modules/role/entities/role.entity';
 
 @Module({
   providers: [EmailService, QueueService, EmailQueueConsumer],
   exports: [EmailService, QueueService],
   imports: [
-    TypeOrmModule.forFeature([User, Organisation, OrganisationUserRole, Profile, Role]),
+    TypeOrmModule.forFeature([User, Profile]),
     BullModule.registerQueueAsync({
       name: 'emailSending',
     }),
