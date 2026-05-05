@@ -12,7 +12,6 @@ import UserService from '@modules/user/user.service';
 import { ProfileService } from '@modules/profile/profile.service';
 import { OtpService } from '@modules/otp/otp.service';
 import { EmailService } from '@modules/email/email.service';
-import { OrganisationsService } from '@modules/organisations/organisations.service';
 import { User } from '@modules/user/entities/user.entity';
 import { Profile } from '@modules/profile/entities/profile.entity';
 import { LoginDto } from '../dto/login.dto';
@@ -30,7 +29,6 @@ describe('AuthenticationService', () => {
   let jwtServiceMock: jest.Mocked<JwtService>;
   let otpServiceMock: jest.Mocked<OtpService>;
   let emailServiceMock: jest.Mocked<EmailService>;
-  let organisationServiceMock: jest.Mocked<OrganisationsService>;
 
   beforeEach(async () => {
     dataSourceMock = {
@@ -67,13 +65,6 @@ describe('AuthenticationService', () => {
           },
         },
         {
-          provide: OrganisationsService,
-          useValue: {
-            create: jest.fn(),
-            getAllUserOrganisations: jest.fn(),
-          },
-        },
-        {
           provide: EmailService,
           useValue: {
             sendForgotPasswordMail: jest.fn(),
@@ -95,7 +86,6 @@ describe('AuthenticationService', () => {
     jwtServiceMock = module.get(JwtService) as jest.Mocked<JwtService>;
     otpServiceMock = module.get(OtpService) as jest.Mocked<OtpService>;
     emailServiceMock = module.get(EmailService) as jest.Mocked<EmailService>;
-    organisationServiceMock = module.get(OrganisationsService) as jest.Mocked<OrganisationsService>;
   });
 
   afterEach(() => {
@@ -144,30 +134,6 @@ describe('AuthenticationService', () => {
         },
       } as User);
 
-      organisationServiceMock.create.mockResolvedValueOnce({
-        id: 'e12973d1-cbc3-45f8-ba13-14991e4490fa',
-        name: "John's Organisation",
-        description: '',
-        email: 'test@example.com',
-        industry: '',
-        type: '',
-        country: '',
-        address: '',
-        state: '',
-        owner_id: 'user-id',
-        created_at: new Date(),
-        updated_at: new Date(),
-      });
-
-      organisationServiceMock.getAllUserOrganisations.mockResolvedValueOnce([
-        {
-          organisation_id: 'e12973d1-cbc3-45f8-ba13-14991e4490fa',
-          name: "John's Organisation",
-          user_role: 'admin',
-          is_owner: true,
-        },
-      ]);
-
       jwtServiceMock.sign.mockReturnValueOnce('mocked_token');
 
       const result = await service.createNewUser(createUserDto);
@@ -181,17 +147,8 @@ describe('AuthenticationService', () => {
             first_name: 'John',
             last_name: 'Doe',
             email: 'test@example.com',
-            is_superadmin: false,
             avatar_url: 'some_url',
           },
-          organisations: [
-            {
-              organisation_id: 'e12973d1-cbc3-45f8-ba13-14991e4490fa',
-              name: "John's Organisation",
-              user_role: 'admin',
-              is_owner: true,
-            },
-          ],
         },
       });
     });
@@ -231,14 +188,6 @@ describe('AuthenticationService', () => {
 
       jest.spyOn(userServiceMock, 'getUserRecord').mockResolvedValue(user);
       jest.spyOn(bcrypt, 'compare').mockImplementation(() => Promise.resolve(true));
-      organisationServiceMock.getAllUserOrganisations.mockResolvedValueOnce([
-        {
-          organisation_id: 'e12973d1-cbc3-45f8-ba13-14991e4490fa',
-          name: "Test's Organisation",
-          user_role: 'admin',
-          is_owner: true,
-        },
-      ]);
       jwtServiceMock.sign.mockReturnValue('jwt_token');
 
       const result = await service.loginUser(loginDto);
@@ -253,16 +202,7 @@ describe('AuthenticationService', () => {
             last_name: 'User',
             email: 'test@example.com',
             avatar_url: 'profile_url',
-            is_superadmin: false,
           },
-          organisations: [
-            {
-              organisation_id: 'e12973d1-cbc3-45f8-ba13-14991e4490fa',
-              name: "Test's Organisation",
-              user_role: 'admin',
-              is_owner: true,
-            },
-          ],
         },
       });
     });
@@ -542,21 +482,13 @@ describe('AuthenticationService', () => {
       expect(res).toEqual(expectedResponse);
     });
 
-    it('should handle errors gracefully', async () => {
+    it('should propagate underlying repository errors', async () => {
       const user_id = 'some-uuid-value-here';
       const password = 'password';
 
       jest.spyOn(userServiceMock, 'getUserRecord').mockRejectedValueOnce(new Error('Database connection error'));
 
-      await expect(service.enable2FA(user_id, password)).rejects.toThrow(
-        new HttpException(
-          {
-            message: 'Database connection error',
-            status_code: HttpStatus.INTERNAL_SERVER_ERROR,
-          },
-          HttpStatus.INTERNAL_SERVER_ERROR
-        )
-      );
+      await expect(service.enable2FA(user_id, password)).rejects.toThrow('Database connection error');
     });
   });
 });

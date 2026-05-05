@@ -10,8 +10,7 @@ import * as fs from 'fs';
 import * as sharp from 'sharp';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { PICTURE_UPDATED } from '@shared/constants/SystemMessages';
-import { mockUser } from '../../../modules/invite/mocks/mockUser';
-import { mockUserWithProfile } from '../mocks/mockUser';
+import { mockUser, mockUserWithProfile } from '../mocks/mockUser';
 jest.mock('sharp');
 describe('ProfileService', () => {
   let service: ProfileService;
