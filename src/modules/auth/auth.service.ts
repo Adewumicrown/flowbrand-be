@@ -6,7 +6,6 @@ import { JwtService } from '@nestjs/jwt';
 import UserService from '@modules/user/user.service';
 import { OtpService } from '@modules/otp/otp.service';
 import { EmailService } from '@modules/email/email.service';
-import { OrganisationsService } from '@modules/organisations/organisations.service';
 import { ProfileService } from '@modules/profile/profile.service';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
@@ -21,7 +20,6 @@ import { UpdateProfileDto } from '@modules/profile/dto/update-profile.dto';
 import { RequestSigninTokenDto } from './dto/request-signin-token.dto';
 import { OtpDto } from '@modules/otp/dto/otp.dto';
 import { DataSource, EntityManager } from 'typeorm';
-import { CreateOrganisationRecordOptions } from '@modules/organisations/dto/create-organisation-options';
 
 @Injectable()
 export default class AuthenticationService {
@@ -30,7 +28,6 @@ export default class AuthenticationService {
     private jwtService: JwtService,
     private otpService: OtpService,
     private emailService: EmailService,
-    private organisationService: OrganisationsService,
     private profileService: ProfileService,
     private dataSource: DataSource
   ) {}
@@ -51,29 +48,6 @@ export default class AuthenticationService {
       if (!user) {
         throw new CustomHttpException(SYS_MSG.FAILED_TO_CREATE_USER, HttpStatus.BAD_REQUEST);
       }
-      const newOrganisationPayload = {
-        name: `${user.first_name}'s Organisation`,
-        description: '',
-        email: user.email,
-        industry: '',
-        type: '',
-        country: '',
-        address: '',
-        state: '',
-      };
-
-      const createOrganisationPayload: CreateOrganisationRecordOptions = {
-        createPayload: newOrganisationPayload,
-        dbTransaction: {
-          useTransaction: true,
-          transactionManager: manager,
-        },
-      };
-
-      const newOrganisation = await this.organisationService.create(createOrganisationPayload);
-
-      const userOrganisations = await this.organisationService.getAllUserOrganisations(user.id, 1, 10);
-      const isSuperAdmin = userOrganisations.map(instance => instance.user_role).includes('super-admin');
 
       const token = (await this.otpService.createOtp(user.id, manager)).token;
 
@@ -89,9 +63,7 @@ export default class AuthenticationService {
           last_name: user.last_name,
           email: user.email,
           avatar_url: user.profile.profile_pic_url,
-          is_superadmin: isSuperAdmin,
         },
-        organisations: userOrganisations,
       };
       return {
         message: SYS_MSG.USER_CREATED_SUCCESSFULLY,
@@ -189,9 +161,7 @@ export default class AuthenticationService {
     if (!isMatch) {
       throw new CustomHttpException(SYS_MSG.INVALID_CREDENTIALS, HttpStatus.UNAUTHORIZED);
     }
-    const userOranisations = await this.organisationService.getAllUserOrganisations(user.id, 1, 10);
     const access_token = this.jwtService.sign({ id: user.id, sub: user.id });
-    const isSuperAdmin = userOranisations.map(instance => instance.user_role).includes('super-admin');
     const responsePayload = {
       access_token,
       data: {
@@ -201,9 +171,7 @@ export default class AuthenticationService {
           last_name: user.last_name,
           email: user.email,
           avatar_url: user.profile && user.profile.profile_pic_url ? user.profile.profile_pic_url : null,
-          is_superadmin: isSuperAdmin,
         },
-        organisations: userOranisations,
       },
     };
 
@@ -342,9 +310,6 @@ export default class AuthenticationService {
       };
       return await this.createUserGoogle(userCreationPayload);
     }
-
-    const userOranisations = await this.organisationService.getAllUserOrganisations(userExists.id, 1, 10);
-    const isSuperAdmin = userOranisations.map(instance => instance.user_role).includes('super-admin');
     const accessToken = this.jwtService.sign({
       sub: userExists.id,
       id: userExists.id,
@@ -369,36 +334,13 @@ export default class AuthenticationService {
           first_name: userExists.first_name,
           last_name: userExists.last_name,
           avatar_url: userExists.profile.profile_pic_url,
-          is_superadmin: isSuperAdmin,
         },
-        organisations: userOranisations,
       },
     };
   }
 
   public async createUserGoogle(userPayload: CreateUserDTO) {
     const newUser = await this.userService.createUser(userPayload);
-    const newOrganisationPaload = {
-      name: `${newUser.first_name}'s Organisation`,
-      description: '',
-      email: newUser.email,
-      industry: '',
-      type: '',
-      country: '',
-      address: '',
-      state: '',
-    };
-
-    const createOrganisationPayload: CreateOrganisationRecordOptions = {
-      createPayload: newOrganisationPaload,
-      dbTransaction: {
-        useTransaction: false,
-      },
-    };
-    await this.organisationService.create(createOrganisationPayload);
-
-    const userOranisations = await this.organisationService.getAllUserOrganisations(newUser.id, 1, 10);
-    const isSuperAdmin = userOranisations.map(instance => instance.user_role).includes('super-admin');
 
     const accessToken = this.jwtService.sign({
       sub: newUser.id,
@@ -423,10 +365,8 @@ export default class AuthenticationService {
           email: newUser.email,
           first_name: newUser.first_name,
           last_name: newUser.last_name,
-          is_superadmin: isSuperAdmin,
           avatar_url: newUser.profile.profile_pic_url,
         },
-        organisations: userOranisations,
       },
     };
   }
