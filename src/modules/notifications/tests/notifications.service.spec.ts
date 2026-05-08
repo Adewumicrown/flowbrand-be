@@ -1,56 +1,25 @@
+import 'reflect-metadata';
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotificationsService } from '../notifications.service';
-import { Repository } from 'typeorm';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Notification } from '../entities/notifications.entity';
-import { mockNotificationRepository } from './mocks/notification-repo.mock';
-import { HttpStatus } from '@nestjs/common';
-import { User } from '../../../modules/user/entities/user.entity';
-import { EmailService } from '../../../modules/email/email.service';
-import UserService from '../../../modules/user/user.service';
-import { CreateNotificationForAllUsersDto } from '../dtos/create-notifiction-all-users.dto';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
-
-const mockEmailService = {
-  sendNotificationMail: jest.fn(),
-};
-
-const mockUserService = {
-  getUserRecord: jest.fn(),
-};
-
-const mockUserRepository = {
-  find: jest.fn(),
-  findOne: jest.fn(),
-  save: jest.fn(),
-  create: jest.fn(),
-};
+import { Notification } from '../entities/notifications.entity';
+import { NotificationType } from '../enums/notification-type.enum';
+import { NotificationsService } from '../notifications.service';
 
 describe('NotificationsService', () => {
   let service: NotificationsService;
-  let repository: Repository<Notification>;
-  let userRepository: Repository<User>;
+  const repositoryMock = {
+    findAndCount: jest.fn(),
+    findOne: jest.fn(),
+    count: jest.fn(),
+    save: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        NotificationsService,
-        {
-          provide: getRepositoryToken(Notification),
-          useValue: mockNotificationRepository,
-        },
-        {
-          provide: getRepositoryToken(User),
-          useValue: mockUserRepository,
-        },
-        { provide: EmailService, useValue: mockEmailService },
-        { provide: UserService, useValue: mockUserService },
-      ],
+      providers: [NotificationsService, { provide: getRepositoryToken(Notification), useValue: repositoryMock }],
     }).compile();
-
     service = module.get<NotificationsService>(NotificationsService);
-    repository = module.get<Repository<Notification>>(getRepositoryToken(Notification));
-    userRepository = module.get<Repository<User>>(getRepositoryToken(User));
   });
 
   afterEach(() => {
@@ -61,46 +30,41 @@ describe('NotificationsService', () => {
     expect(service).toBeDefined();
   });
 
-  describe('createGlobalNotifications', () => {
-    const createNotificationDto = new CreateNotificationForAllUsersDto();
-    createNotificationDto.message = 'Test notification';
+  describe('listForUser', () => {
+    it('returns paginated notifications and unread count', async () => {
+      const sample = [
+        { id: 'n-1', user_id: 'u-1', type: NotificationType.SYSTEM, title: 't', body: 'b', is_read: false },
+      ];
+      repositoryMock.findAndCount.mockResolvedValueOnce([sample, 1]);
+      repositoryMock.count.mockResolvedValueOnce(1);
 
-    it('should create notifications for all users successfully', async () => {
-      const users = [{ id: '1' }, { id: '2' }] as User[];
-      const notifications = users.map(user => ({
-        message: createNotificationDto.message,
-        user,
-      }));
+      const result = await service.listForUser('u-1', 1, 10);
 
-      mockUserRepository.find.mockResolvedValue(users);
-      mockNotificationRepository.create.mockImplementation(notification => notification);
-      mockNotificationRepository.save.mockResolvedValue(notifications);
+      expect(result.data.total_notification_count).toBe(1);
+      expect(result.data.total_unread_notification_count).toBe(1);
+      expect(result.data.notifications).toEqual(sample);
+    });
+  });
 
-      const result = await service.createGlobalNotifications(createNotificationDto);
+  describe('markRead', () => {
+    it('marks the notification as read when ownership matches', async () => {
+      repositoryMock.findOne.mockResolvedValueOnce({ id: 'n-1', user_id: 'u-1', is_read: false });
+      repositoryMock.save.mockResolvedValueOnce(undefined);
 
-      expect(result).toEqual({
-        status: 'success',
-        message: 'Notification created successfully',
-        data: null,
-      });
-      expect(mockUserRepository.find).toHaveBeenCalledTimes(1);
-      expect(mockNotificationRepository.create).toHaveBeenCalledTimes(users.length);
-      expect(mockNotificationRepository.save).toHaveBeenCalledWith(notifications);
+      const result = await service.markRead('n-1', 'u-1');
+
+      expect(result.data.is_read).toBe(true);
+      expect(result.data.read_at).toBeInstanceOf(Date);
     });
 
-    it('should propagate underlying error when notificationRepository.save fails', async () => {
-      const users = [{ id: '1' }, { id: '2' }] as User[];
-      mockUserRepository.find.mockResolvedValue(users);
-      mockNotificationRepository.create.mockImplementation(notification => notification);
-      const saveError = new Error('Failed to save notifications');
-      mockNotificationRepository.save.mockRejectedValue(saveError);
+    it('rejects when ownership does not match', async () => {
+      repositoryMock.findOne.mockResolvedValueOnce({ id: 'n-1', user_id: 'someone-else' });
+      await expect(service.markRead('n-1', 'u-1')).rejects.toThrow(CustomHttpException);
+    });
 
-      await expect(service.createGlobalNotifications(createNotificationDto)).rejects.toThrow(
-        'Failed to save notifications'
-      );
-
-      expect(mockUserRepository.find).toHaveBeenCalledTimes(1);
-      expect(mockNotificationRepository.save).toHaveBeenCalledTimes(1);
+    it('rejects when notification missing', async () => {
+      repositoryMock.findOne.mockResolvedValueOnce(null);
+      await expect(service.markRead('n-1', 'u-1')).rejects.toThrow(CustomHttpException);
     });
   });
 });

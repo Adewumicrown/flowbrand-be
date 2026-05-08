@@ -1,34 +1,26 @@
 import { Module } from '@nestjs/common';
-import RegistrationController from './auth.controller';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import authConfig from '@config/auth.config';
 import { User } from '@modules/user/entities/user.entity';
+import RegistrationController from './auth.controller';
 import AuthenticationService from './auth.service';
-import { Repository } from 'typeorm';
-import UserService from '@modules/user/user.service';
-import { OtpService } from '@modules/otp/otp.service';
-import { EmailService } from '@modules/email/email.service';
-import { ProfileService } from '@modules/profile/profile.service';
-import { Otp } from '@modules/otp/entities/otp.entity';
-import { Profile } from '@modules/profile/entities/profile.entity';
-import { OtpModule } from '@modules/otp/otp.module';
-import { EmailModule } from '@modules/email/email.module';
-import appConfig from '@config/auth.config';
+import { AuthMetadata } from './entities/auth-metadata.entity';
+import { UserSession } from './entities/user-session.entity';
 
 @Module({
   controllers: [RegistrationController],
-  providers: [AuthenticationService, Repository, UserService, OtpService, EmailService, ProfileService],
+  providers: [AuthenticationService],
   imports: [
-    TypeOrmModule.forFeature([User, Otp, Profile]),
+    TypeOrmModule.forFeature([User, AuthMetadata, UserSession]),
     PassportModule,
-    OtpModule,
-    EmailModule,
     JwtModule.register({
       global: true,
-      secret: appConfig().jwtSecret,
-      signOptions: { expiresIn: `${appConfig().jwtExpiry}s` },
+      secret: authConfig().jwtSecret,
+      signOptions: { expiresIn: `${authConfig().jwtExpiry}s` },
     }),
   ],
+  exports: [TypeOrmModule],
 })
 export class AuthModule {}

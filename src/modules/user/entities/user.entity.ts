@@ -1,80 +1,42 @@
-import * as bcrypt from 'bcryptjs';
-import {
-  BeforeInsert,
-  BeforeUpdate,
-  Column,
-  DeleteDateColumn,
-  Entity,
-  JoinColumn,
-  JoinTable,
-  ManyToMany,
-  OneToMany,
-  OneToOne,
-} from 'typeorm';
+import { Column, DeleteDateColumn, Entity, Index } from 'typeorm';
 import { AbstractBaseEntity } from '../../../entities/base.entity';
-import { Notification } from '../../../modules/notifications/entities/notifications.entity';
-import { Profile } from '../../profile/entities/profile.entity';
-
-export enum UserType {
-  SUPER_ADMIN = 'super-admin',
-  ADMIN = 'admin',
-  USER = 'vendor',
-}
 
 @Entity({ name: 'users' })
+@Index('IDX_users_auth_provider_user', ['auth_provider', 'provider_user_id'], { unique: true })
 export class User extends AbstractBaseEntity {
-  @Column({ nullable: false })
-  first_name: string;
+  @Column({ type: 'varchar', length: 100, nullable: false })
+  full_name: string;
 
-  @Column({ nullable: false })
-  last_name: string;
-
-  @Column({ unique: true, nullable: false })
+  @Column({ type: 'varchar', length: 255, unique: true, nullable: false })
   email: string;
 
-  @Column({ unique: false, nullable: true })
-  status: string;
+  @Column({ type: 'text', nullable: true })
+  password: string | null;
 
-  @Column({ nullable: false })
-  password: string;
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  country: string | null;
 
-  @Column({ nullable: true })
-  phone: string;
+  @Column({ type: 'boolean', default: false })
+  is_verified: boolean;
 
-  @Column({ nullable: true })
+  @Column({ type: 'boolean', default: true })
   is_active: boolean;
 
-  @Column('simple-array', { nullable: true })
-  backup_codes: string[];
+  @Column({ type: 'text', nullable: true })
+  avatar_url: string | null;
 
-  @Column({ nullable: true })
-  attempts_left: number;
+  @Column({ type: 'varchar', length: 20, nullable: false })
+  auth_provider: string;
 
-  @Column({ nullable: true })
-  time_left: number;
+  @Column({ type: 'text', nullable: true })
+  provider_user_id: string | null;
 
-  @Column({ nullable: true })
-  secret: string;
+  @Column({ type: 'varchar', length: 6, nullable: false })
+  otp_code: string;
 
-  @Column({ default: false })
-  is_2fa_enabled: boolean;
+  @Column({ type: 'timestamp', nullable: false })
+  expires_at: Date;
 
-  @Column({ default: false })
-  is_superadmin: boolean;
-
-  @DeleteDateColumn({ nullable: true })
-  deletedAt?: Date;
-
-  @OneToOne(() => Profile, profile => profile.id)
-  @JoinColumn({ name: 'profile_id' })
-  profile: Profile;
-
-  @BeforeInsert()
-  @BeforeUpdate()
-  async hashPassword() {
-    this.password = await bcrypt.hash(this.password, 10);
-  }
-
-  @OneToMany(() => Notification, notification => notification.user)
-  notifications: Notification[];
+  @DeleteDateColumn({ name: 'deleted_at', type: 'timestamp', nullable: true })
+  deleted_at: Date | null;
 }

@@ -4,8 +4,6 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
-const isDevelopment = process.env.NODE_ENV === 'development';
-
 const dataSource = new DataSource({
   type: process.env.DB_TYPE as 'postgres',
   username: process.env.DB_USERNAME,
@@ -15,7 +13,7 @@ const dataSource = new DataSource({
   database: process.env.DB_NAME,
   entities: [process.env.DB_ENTITIES],
   migrations: [process.env.DB_MIGRATIONS],
-  synchronize: isDevelopment,
+  synchronize: false,
   migrationsTableName: 'migrations',
   ssl: process.env.DB_SSL === 'true',
 });
