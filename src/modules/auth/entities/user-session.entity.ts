@@ -19,8 +19,8 @@ export class UserSession {
   @Column({ type: 'timestamp', nullable: false })
   expires_at: Date;
 
-  @Column({ type: 'boolean', nullable: true })
-  is_revoked: boolean | null;
+  @Column({ type: 'boolean', nullable: false, default: false })
+  is_revoked: boolean;
 
   @Column({ type: 'timestamp', nullable: true })
   revoked_at: Date | null;

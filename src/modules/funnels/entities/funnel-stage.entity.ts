@@ -19,7 +19,7 @@ export class FunnelStage extends AbstractBaseEntity {
   title: string;
 
   @Column({ type: 'text', nullable: true })
-  description: string;
+  description: string | null;
 
   @Column({ type: 'boolean', default: false })
   is_unlocked: boolean;
