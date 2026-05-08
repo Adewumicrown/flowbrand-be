@@ -1,91 +1,35 @@
-import 'module-alias/register';
 import 'reflect-metadata';
-import * as bcrypt from 'bcryptjs';
-import * as speakeasy from 'speakeasy';
-import { Test, TestingModule } from '@nestjs/testing';
-import * as SYS_MSG from '@shared/constants/SystemMessages';
-import { BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
+import * as bcrypt from 'bcrypt';
+import { HttpStatus } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { Test, TestingModule } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
-import AuthenticationService from '../auth.service';
-import UserService from '@modules/user/user.service';
-import { ProfileService } from '@modules/profile/profile.service';
-import { OtpService } from '@modules/otp/otp.service';
-import { EmailService } from '@modules/email/email.service';
 import { User } from '@modules/user/entities/user.entity';
-import { Profile } from '@modules/profile/entities/profile.entity';
-import { LoginDto } from '../dto/login.dto';
-import UserResponseDTO from '@modules/user/dto/user-response.dto';
-import { Otp } from '@modules/otp/entities/otp.entity';
-import { Verify2FADto } from '../dto/verify-2fa.dto';
-import { DataSource, EntityManager } from 'typeorm';
-jest.mock('speakeasy');
+import AuthenticationService from '../auth.service';
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;
-  let userServiceMock: jest.Mocked<UserService>;
-  let profileServiceMock: jest.Mocked<ProfileService>;
-  let dataSourceMock: jest.Mocked<DataSource>;
-  let jwtServiceMock: jest.Mocked<JwtService>;
-  let otpServiceMock: jest.Mocked<OtpService>;
-  let emailServiceMock: jest.Mocked<EmailService>;
+  const userRepositoryMock = {
+    findOne: jest.fn(),
+    create: jest.fn(),
+    save: jest.fn(),
+  };
+  const jwtServiceMock = {
+    sign: jest.fn(),
+  };
 
   beforeEach(async () => {
-    dataSourceMock = {
-      transaction: jest.fn().mockImplementation(async cb => cb({} as EntityManager)),
-      manager: {} as EntityManager,
-    } as unknown as jest.Mocked<DataSource>;
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthenticationService,
-        {
-          provide: UserService,
-          useValue: {
-            getUserRecord: jest.fn(),
-            updateUserRecord: jest.fn(),
-            createUser: jest.fn(),
-          },
-        },
-        {
-          provide: ProfileService,
-          useValue: {
-            updateProfile: jest.fn(),
-          },
-        },
-        {
-          provide: JwtService,
-          useValue: {
-            sign: jest.fn(),
-          },
-        },
-        {
-          provide: OtpService,
-          useValue: {
-            createOtp: jest.fn().mockResolvedValue({ token: 999987 }),
-          },
-        },
-        {
-          provide: EmailService,
-          useValue: {
-            sendForgotPasswordMail: jest.fn(),
-            sendUserEmailConfirmationOtp: jest.fn(),
-            sendUserConfirmationMail: jest.fn(),
-            sendEmail: jest.fn(),
-          },
-        },
-        {
-          provide: DataSource,
-          useValue: dataSourceMock,
-        },
+        { provide: getRepositoryToken(User), useValue: userRepositoryMock },
+        { provide: JwtService, useValue: jwtServiceMock },
       ],
     }).compile();
 
     service = module.get<AuthenticationService>(AuthenticationService);
-    userServiceMock = module.get(UserService) as jest.Mocked<UserService>;
-    profileServiceMock = module.get(ProfileService) as jest.Mocked<ProfileService>;
-    jwtServiceMock = module.get(JwtService) as jest.Mocked<JwtService>;
-    otpServiceMock = module.get(OtpService) as jest.Mocked<OtpService>;
-    emailServiceMock = module.get(EmailService) as jest.Mocked<EmailService>;
   });
 
   afterEach(() => {
@@ -97,398 +41,120 @@ describe('AuthenticationService', () => {
   });
 
   describe('createNewUser', () => {
-    const createUserDto = {
-      id: '1',
-      email: 'test@example.com',
-      password: 'password123',
-      first_name: 'John',
-      last_name: 'Doe',
+    const dto = {
+      email: 'jane@example.com',
+      full_name: 'Jane Doe',
+      password: 'P@ssword123',
+      country: 'Nigeria',
     };
 
-    const mockUser: Partial<User> = {
-      id: '1',
-      email: createUserDto.email,
-      first_name: createUserDto.first_name,
-      last_name: createUserDto.last_name,
-      created_at: new Date(),
-      is_active: true,
-      attempts_left: 3,
-      time_left: 0,
-      profile: {
-        profile_pic_url: 'some_url',
-      } as Profile,
-    };
-
-    it('should create a new user successfully', async () => {
-      userServiceMock.getUserRecord.mockResolvedValueOnce(null);
-
-      userServiceMock.createUser.mockResolvedValueOnce(mockUser as User);
-
-      userServiceMock.getUserRecord.mockResolvedValueOnce({
-        id: '1',
-        first_name: 'John',
-        last_name: 'Doe',
-        email: 'test@example.com',
-        profile: {
-          profile_pic_url: 'some_url',
-        },
-      } as User);
-
-      jwtServiceMock.sign.mockReturnValueOnce('mocked_token');
-
-      const result = await service.createNewUser(createUserDto);
-
-      expect(result).toEqual({
-        message: SYS_MSG.USER_CREATED_SUCCESSFULLY,
-        access_token: 'mocked_token',
-        data: {
-          user: {
-            id: '1',
-            first_name: 'John',
-            last_name: 'Doe',
-            email: 'test@example.com',
-            avatar_url: 'some_url',
-          },
-        },
+    it('creates a user when none exists with that email', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce(null);
+      userRepositoryMock.create.mockImplementation(input => input);
+      userRepositoryMock.save.mockResolvedValueOnce({
+        id: 'user-1',
+        email: dto.email,
+        full_name: dto.full_name,
+        avatar_url: null,
       });
+      jwtServiceMock.sign.mockReturnValueOnce('jwt');
+
+      const result = await service.createNewUser(dto);
+
+      expect(result.status_code).toBe(HttpStatus.CREATED);
+      expect(result.message).toBe(SYS_MSG.USER_CREATED_SUCCESSFULLY);
+      expect(result.access_token).toBe('jwt');
+      expect(result.data.user).toEqual({
+        id: 'user-1',
+        full_name: dto.full_name,
+        email: dto.email,
+        avatar_url: null,
+      });
+      const created = userRepositoryMock.create.mock.calls[0][0];
+      expect(created.auth_provider).toBe('email');
+      expect(created.otp_code).toMatch(/^\d{6}$/);
+      expect(created.expires_at).toBeInstanceOf(Date);
     });
 
-    it('should return error if user already exists', async () => {
-      userServiceMock.getUserRecord.mockResolvedValueOnce(mockUser as User);
-
-      await expect(service.createNewUser(createUserDto)).rejects.toThrow(HttpException);
-    });
-
-    it('should return error if user creation fails', async () => {
-      userServiceMock.getUserRecord.mockResolvedValueOnce(null);
-      userServiceMock.createUser.mockResolvedValueOnce(undefined);
-      userServiceMock.getUserRecord.mockResolvedValueOnce(null);
-
-      await expect(service.createNewUser(createUserDto)).rejects.toThrow(HttpException);
+    it('throws when a user with that email already exists', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'existing' });
+      await expect(service.createNewUser(dto)).rejects.toThrow(CustomHttpException);
     });
   });
 
   describe('loginUser', () => {
-    it('should return login response if credentials are valid', async () => {
-      const loginDto: LoginDto = { email: 'test@example.com', password: 'password123' };
-      const user = {
-        id: '1',
-        email: loginDto.email,
-        first_name: 'Test',
-        last_name: 'User',
-        password: await bcrypt.hash('password123', 10),
-        is_active: true,
-        attempts_left: 2,
-        created_at: new Date(),
-        updated_at: new Date(),
-        profile: {
-          profile_pic_url: 'profile_url',
-        } as Profile,
-      };
-
-      jest.spyOn(userServiceMock, 'getUserRecord').mockResolvedValue(user);
-      jest.spyOn(bcrypt, 'compare').mockImplementation(() => Promise.resolve(true));
-      jwtServiceMock.sign.mockReturnValue('jwt_token');
-
-      const result = await service.loginUser(loginDto);
-
-      expect(result).toEqual({
-        message: 'Login successful',
-        access_token: 'jwt_token',
-        data: {
-          user: {
-            id: '1',
-            first_name: 'Test',
-            last_name: 'User',
-            email: 'test@example.com',
-            avatar_url: 'profile_url',
-          },
-        },
+    it('returns an access token for valid credentials', async () => {
+      const password = 'P@ssword123';
+      const hashed = await bcrypt.hash(password, 10);
+      userRepositoryMock.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'jane@example.com',
+        full_name: 'Jane Doe',
+        avatar_url: null,
+        password: hashed,
       });
+      jwtServiceMock.sign.mockReturnValueOnce('jwt');
+
+      const result = await service.loginUser({ email: 'jane@example.com', password });
+
+      expect(result.message).toBe(SYS_MSG.LOGIN_SUCCESSFUL);
+      expect(result.access_token).toBe('jwt');
     });
 
-    it('should throw an unauthorized error for invalid email', async () => {
-      const loginDto: LoginDto = { email: 'invalid@example.com', password: 'password123' };
-
-      userServiceMock.getUserRecord.mockResolvedValue(null);
-
-      await expect(service.loginUser(loginDto)).rejects.toThrow(CustomHttpException);
+    it('rejects unknown emails', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce(null);
+      await expect(service.loginUser({ email: 'x@y.z', password: 'pass' })).rejects.toThrow(CustomHttpException);
     });
 
-    it('should throw an unauthorized error for invalid password', async () => {
-      const loginDto: LoginDto = { email: 'test@example.com', password: 'wrongpassword' };
-      const user: UserResponseDTO = {
-        id: '1',
-        email: loginDto.email,
-        first_name: 'Test',
-        last_name: 'User',
-        password: await bcrypt.hash('password123', 10),
-        is_active: true,
-        attempts_left: 2,
-        created_at: new Date(),
-        updated_at: new Date(),
-      };
-
-      userServiceMock.getUserRecord.mockResolvedValue(user);
-      jest.spyOn(bcrypt, 'compare').mockImplementation(() => Promise.resolve(false));
-      await expect(service.loginUser(loginDto)).rejects.toThrow(CustomHttpException);
-    });
-  });
-
-  describe('verify2fa', () => {
-    it('should throw error if totp code is incorrect', async () => {
-      const verify2faDto: Verify2FADto = { totp_code: '12345' };
-      const userId = 'some-uuid-here';
-
-      const user: UserResponseDTO = {
-        id: userId,
-        email: 'test@example.com',
-        first_name: 'John',
-        last_name: 'Doe',
-        attempts_left: 2,
-        is_active: true,
-        secret: 'some-2fa-secret',
-        is_2fa_enabled: false,
-        created_at: new Date(),
-        updated_at: new Date(),
-      };
-      jest.spyOn(userServiceMock, 'getUserRecord').mockResolvedValueOnce(user);
-      (speakeasy.totp.verify as jest.Mock).mockReturnValue(false);
-
-      await expect(service.verify2fa(verify2faDto, userId)).rejects.toThrow(CustomHttpException);
-    });
-
-    it('should enable 2fa if successful', async () => {
-      const verify2faDto: Verify2FADto = { totp_code: '12345' };
-      const userId = 'some-uuid-here';
-
-      const user: UserResponseDTO = {
-        id: userId,
-        email: 'test@example.com',
-        first_name: 'John',
-        last_name: 'Doe',
-        attempts_left: 2,
-        is_active: true,
-        secret: 'some-2fa-secret',
-        is_2fa_enabled: false,
-        created_at: new Date(),
-        updated_at: new Date(),
-      };
-      const codes: string[] = ['98765432', '87654321', '76543210', '65432109', '54321098'];
-      jest.spyOn(userServiceMock, 'getUserRecord').mockResolvedValueOnce(user);
-      jest.spyOn(userServiceMock, 'updateUserRecord').mockResolvedValueOnce(undefined);
-      jest.spyOn(service, 'generateBackupCodes').mockReturnValue(codes);
-      (speakeasy.totp.verify as jest.Mock).mockReturnValue(true);
-
-      const result = await service.verify2fa(verify2faDto, userId);
-      expect(result).toEqual({
-        message: SYS_MSG.TWO_FACTOR_VERIFIED_SUCCESSFULLY,
-        data: { backup_codes: codes },
+    it('rejects bad passwords', async () => {
+      const hashed = await bcrypt.hash('correct-password', 10);
+      userRepositoryMock.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'jane@example.com',
+        full_name: 'Jane Doe',
+        avatar_url: null,
+        password: hashed,
       });
+      await expect(
+        service.loginUser({ email: 'jane@example.com', password: 'wrong-password' })
+      ).rejects.toThrow(CustomHttpException);
+    });
+
+    it('rejects accounts without a stored password (OAuth-only)', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'jane@example.com',
+        password: null,
+      });
+      await expect(service.loginUser({ email: 'jane@example.com', password: 'anything' })).rejects.toThrow(
+        CustomHttpException
+      );
     });
   });
 
   describe('changePassword', () => {
-    const userId = 'some-uuid-here';
-    const oldPassword = 'oldPassword123';
-    const newPassword = 'newPassword123';
+    it('updates the password when the old one matches', async () => {
+      const oldPassword = 'OldP@ss123';
+      const newPassword = 'NewP@ss123';
+      const hashed = await bcrypt.hash(oldPassword, 10);
+      userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', password: hashed });
+      userRepositoryMock.save.mockResolvedValueOnce(undefined);
 
-    let mockUser: Partial<User>;
+      const result = await service.changePassword('user-1', oldPassword, newPassword);
 
-    beforeEach(async () => {
-      mockUser = {
-        id: userId,
-        email: 'test@example.com',
-        password: await bcrypt.hash(oldPassword, 10),
-        first_name: 'John',
-        last_name: 'Doe',
-      };
+      expect(result.message).toBe(SYS_MSG.PASSWORD_UPDATED);
+      expect(userRepositoryMock.save).toHaveBeenCalled();
     });
 
-    it('should change password successfully', async () => {
-      userServiceMock.getUserRecord.mockResolvedValueOnce(mockUser as User);
-      userServiceMock.updateUserRecord.mockResolvedValueOnce(undefined);
-
-      const result = await service.changePassword(userId, oldPassword, newPassword);
-
-      expect(userServiceMock.getUserRecord).toHaveBeenCalledWith({
-        identifier: userId,
-        identifierType: 'id',
-      });
-      expect(userServiceMock.updateUserRecord).toHaveBeenCalledWith({
-        updatePayload: { password: expect.any(String) },
-        identifierOptions: {
-          identifierType: 'id',
-          identifier: userId,
-        },
-      });
-      expect(result).toEqual({
-        message: SYS_MSG.PASSWORD_UPDATED,
-      });
+    it('throws when the user is missing', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce(null);
+      await expect(service.changePassword('user-1', 'x', 'y')).rejects.toThrow(CustomHttpException);
     });
 
-    it('should throw NOT FOUND if user does not exist', async () => {
-      userServiceMock.getUserRecord.mockResolvedValueOnce(null);
-
-      await expect(service.changePassword(userId, oldPassword, newPassword)).rejects.toThrow(CustomHttpException);
-    });
-
-    it('should throw INVALID PASSWORD if old password is incorrect', async () => {
-      userServiceMock.getUserRecord.mockResolvedValueOnce(mockUser as User);
-      const wrongOldPassword = 'wrongOldPassword';
-
-      await expect(service.changePassword(userId, wrongOldPassword, newPassword)).rejects.toThrow(CustomHttpException);
-    });
-  });
-
-  describe('generateBackupCodes', () => {
-    it('should generate random backup codes when called', () => {
-      const codes = service.generateBackupCodes();
-      expect(codes).toBeInstanceOf(Array);
-    });
-  });
-  describe('forgotPassword', () => {
-    const email = 'test@example.com';
-    const emailData = {
-      to: email,
-      subject: 'Reset Password',
-      template: 'Password-Reset-Complete-Template',
-      context: {
-        otp: '123456',
-        name: email,
-      },
-    };
-
-    beforeEach(() => {
-      process.env.BASE_URL = 'http://example.com';
-    });
-
-    it('should send reset password email successfully', async () => {
-      const mockUser: Partial<User> = { id: '1', email };
-      const mockOtp: Otp = {
-        id: '1',
-        token: '123456',
-        expiry: new Date(Date.now() + 3600000), // 1 hour from now
-        user: mockUser as User,
-        user_id: '1',
-        created_at: new Date(),
-        updated_at: new Date(),
-      };
-
-      userServiceMock.getUserRecord.mockResolvedValueOnce(mockUser as User);
-      otpServiceMock.createOtp.mockResolvedValueOnce(mockOtp);
-
-      const result = await service.forgotPassword({ email });
-
-      expect(result.message).toBe('Email sent successfully');
-    });
-
-    it('should throw error if user not found', async () => {
-      userServiceMock.getUserRecord.mockRejectedValueOnce(
-        new BadRequestException({
-          status_code: HttpStatus.BAD_REQUEST,
-          message: SYS_MSG.USER_ACCOUNT_DOES_NOT_EXIST,
-        })
-      );
-
-      await expect(service.forgotPassword({ email })).rejects.toThrow(HttpException);
-    });
-  });
-
-  describe('Enabling two factor authentication', () => {
-    it('should return NOT FOUND if user does not exists', async () => {
-      const user_id = 'another-uuid-value-over-here';
-      const password = 'password';
-
-      const existingRecord = null;
-      jest.spyOn(userServiceMock, 'getUserRecord').mockResolvedValueOnce(existingRecord);
-      await expect(service.enable2FA(user_id, password)).rejects.toThrow(CustomHttpException);
-    });
-
-    it('should return INVALID PASSWORD if user enters a wrong password', async () => {
-      const user_id = 'some-uuid-value-here';
-      const password = 'abc';
-
-      const existingRecord = {
-        email: 'test@example.com',
-        first_name: 'John',
-        last_name: 'Doe',
-        password: await bcrypt.hash('password', 10),
-        id: 'some-uuid-value-here',
-      };
-      jest.spyOn(userServiceMock, 'getUserRecord').mockResolvedValueOnce(existingRecord);
-
-      await expect(service.enable2FA(user_id, password)).rejects.toThrow(CustomHttpException);
-    });
-
-    it('should return 2FA ALREADY ENABLED if user tries to enable 2fa when enabled', async () => {
-      const user_id = 'some-uuid-value-here';
-      const password = 'password';
-
-      const existingRecord = {
-        email: 'test@example.com',
-        first_name: 'John',
-        last_name: 'Doe',
-        password: await bcrypt.hash('password', 10),
-        secret: 'secret',
-        is_2fa_enabled: true,
-        id: 'some-uuid-value-here',
-      };
-
-      jest.spyOn(userServiceMock, 'getUserRecord').mockResolvedValueOnce(existingRecord);
-
-      await expect(service.enable2FA(user_id, password)).rejects.toThrow(HttpException);
-    });
-
-    it('should enable 2FA and return secret and QR code URL for a valid user', async () => {
-      const user_id = 'some-uuid-value-here';
-      const password = 'password123';
-
-      const existingRecord = {
-        email: 'test@example.com',
-        first_name: 'John',
-        last_name: 'Doe',
-        password: await bcrypt.hash('password123', 10),
-        is_2fa_enabled: false,
-        id: 'some-uuid-value-here',
-      };
-      jest.spyOn(userServiceMock, 'getUserRecord').mockResolvedValueOnce(existingRecord);
-
-      const secret: speakeasy.GeneratedSecret = {
-        base32: 'base 32',
-        ascii: 'ascii',
-        hex: 'hex',
-        google_auth_qr: 'dhjad',
-      };
-      jest.spyOn(speakeasy, 'generateSecret').mockReturnValue(secret);
-      jest.spyOn(userServiceMock, 'updateUserRecord').mockResolvedValueOnce(undefined);
-
-      const expectedResponse = {
-        status_code: HttpStatus.OK,
-        message: SYS_MSG.TWO_FA_INITIATED,
-        data: {
-          secret: secret.base32,
-          qr_code_url: speakeasy.otpauthURL({
-            secret: secret.ascii,
-            label: `Hng:${existingRecord.email}`,
-            issuer: 'Hng Boilerplate',
-          }),
-        },
-      };
-
-      jest.spyOn(service, 'enable2FA').mockResolvedValueOnce(expectedResponse);
-
-      const res = await service.enable2FA(user_id, password);
-      expect(res).toEqual(expectedResponse);
-    });
-
-    it('should propagate underlying repository errors', async () => {
-      const user_id = 'some-uuid-value-here';
-      const password = 'password';
-
-      jest.spyOn(userServiceMock, 'getUserRecord').mockRejectedValueOnce(new Error('Database connection error'));
-
-      await expect(service.enable2FA(user_id, password)).rejects.toThrow('Database connection error');
+    it('throws when the old password is wrong', async () => {
+      const hashed = await bcrypt.hash('correct-old', 10);
+      userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', password: hashed });
+      await expect(service.changePassword('user-1', 'wrong-old', 'new')).rejects.toThrow(CustomHttpException);
     });
   });
 });

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsNotEmpty, IsOptional, IsString, IsStrongPassword, MinLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsOptional, IsString, IsStrongPassword, MaxLength, MinLength } from 'class-validator';
 
 export class CreateUserDTO {
   @ApiProperty({
@@ -10,35 +10,27 @@ export class CreateUserDTO {
   email: string;
 
   @ApiProperty({
-    description: 'The first name of the user',
-    example: 'John',
+    description: 'The full name of the user',
+    example: 'John Doe',
   })
   @IsNotEmpty()
   @IsString()
-  first_name: string;
+  @MaxLength(100)
+  full_name: string;
 
   @ApiProperty({
-    description: 'The last name of the user',
-    example: 'Doe',
-  })
-  @IsNotEmpty()
-  @IsString()
-  last_name: string;
-
-  @ApiProperty({
-    description: 'The URL for the user profile picture',
-    example: 'https://example.com/profile-pic.jpg',
+    description: 'The country of the user',
+    example: 'Nigeria',
     required: false,
   })
   @IsOptional()
   @IsString()
-  profile_pic_url?: string;
+  @MaxLength(100)
+  country?: string;
 
   @ApiProperty({
     description:
-      'The password for the user account.\
-    It must contain at least one uppercase letter, one lowercase letter,\
-    one number, and one special character.',
+      'The password for the user account. Must contain at least one uppercase letter, one lowercase letter, one number, and one special character.',
     example: 'P@ssw0rd!',
   })
   @MinLength(8)
@@ -51,13 +43,4 @@ export class CreateUserDTO {
     }
   )
   password: string;
-
-  @ApiProperty({
-    description: 'An optional admin secret for elevated permissions',
-    example: 'admin123',
-    required: false,
-  })
-  @IsOptional()
-  @IsString()
-  admin_secret?: string;
 }

@@ -1,39 +1,8 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  ParseUUIDPipe,
-  Patch,
-  Query,
-  Req,
-  Request,
-  UseGuards,
-  Res,
-  Delete,
-} from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiForbiddenResponse,
-  ApiInternalServerErrorResponse,
-  ApiOkResponse,
-  ApiOperation,
-  ApiQuery,
-  ApiResponse,
-  ApiTags,
-  ApiUnauthorizedResponse,
-} from '@nestjs/swagger';
-import { DeactivateAccountDto } from './dto/deactivate-account.dto';
-import { UpdateUserDto } from './dto/update-user-dto';
-import { UserPayload } from './interfaces/user-payload.interface';
+import { Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Req } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Request } from 'express';
+import * as SYS_MSG from '@shared/constants/SystemMessages';
 import UserService from './user.service';
-import { SuperAdminGuard } from '@guards/super-admin.guard';
-import { ReactivateAccountDto } from './dto/reactivate-account.dto';
-import { UpdateUserStatusDto } from './dto/update-user-status.dto';
-import { UpdateUserStatusResponseDto } from './dto/update-user-status-response.dto';
-import { GetUserStatsResponseDto } from './dto/get-user-stats-response.dto';
-import { Response } from 'express';
-import { UserDataExportDto } from './dto/user-data-export.dto';
 
 @ApiBearerAuth()
 @ApiTags('Users')
@@ -42,166 +11,42 @@ export class UserController {
   constructor(private readonly userService: UserService) {}
 
   @Patch('deactivate')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Deactivate a user account' })
-  @ApiResponse({ status: 200, description: 'The account has been successfully deactivated.' })
-  @ApiResponse({ status: 400, description: 'Bad Request.' })
-  @ApiResponse({ status: 401, description: 'Unauthorized.' })
-  @ApiResponse({ status: 500, description: 'Internal Server Error.' })
-  async deactivateAccount(@Req() request: Request, @Body() deactivateAccountDto: DeactivateAccountDto) {
-    const user = request['user'];
-    const userId = user.sub;
-
-    return this.userService.deactivateUser(userId, deactivateAccountDto);
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Deactivate the authenticated user account' })
+  @ApiResponse({ status: HttpStatus.OK, description: SYS_MSG.ACCOUNT_DEACTIVATED_SUCCESSFULLY })
+  async deactivate(@Req() request: Request) {
+    const user = request['user'] as { id: string };
+    return this.userService.deactivateUser(user.id);
   }
 
-  @Patch('/reactivate')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Reactivate a user account' })
-  @ApiResponse({ status: 200, description: 'The account has been successfully reactivated.' })
-  @ApiResponse({ status: 400, description: 'Bad Request.' })
-  @ApiResponse({ status: 401, description: 'Unauthorized.' })
-  @ApiResponse({ status: 500, description: 'Internal Server Error.' })
-  async reactivateAccount(@Body() reactivateAccountDto: ReactivateAccountDto) {
-    const { email } = reactivateAccountDto;
-
-    return this.userService.reactivateUser(email, reactivateAccountDto);
-  }
-
-  @Get('stats')
-  @ApiOperation({ summary: 'Get user statistics (Super Admin only)' })
-  @ApiResponse({
-    status: 200,
-    description: 'User statistics retrieved successfully',
-    type: GetUserStatsResponseDto,
-  })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiQuery({
-    name: 'status',
-    required: false,
-    enum: ['active', 'inactive', 'deleted'],
-    description: 'Filter users by status',
-  })
-  @UseGuards(SuperAdminGuard)
-  async getUserStats(@Query('status') status?: string): Promise<GetUserStatsResponseDto> {
-    return this.userService.getUserStats(status);
-  }
-
-  @ApiOperation({ summary: 'Update User' })
-  @ApiResponse({
-    status: 200,
-    description: 'User updated seuccessfully',
-    type: UpdateUserDto,
-  })
-  @Patch(':userId')
-  async updateUser(
-    @Request() req: { user: UserPayload },
-    @Param('userId') userId: string,
-    @Body() updatedUserDto: UpdateUserDto
-  ) {
-    return this.userService.updateUser(userId, updatedUserDto, req.user);
-  }
-
-  @ApiQuery({
-    name: 'format',
-    description: 'The format in which the user data should be exported (e.g., JSON, XLSX)',
-    enum: ['json', 'xlsx'],
-    required: true,
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Returns the user data in the requested format.',
-    content: {
-      'application/json': {
-        schema: {
-          type: 'object',
-          properties: {
-            user: {
-              type: 'object',
-              description: 'User data object',
-            },
-          },
-        },
-      },
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {
-        schema: {
-          type: 'string',
-          format: 'binary',
-        },
-      },
-    },
-  })
-  @Get('export')
-  async exportUserData(
-    @Query() { format }: UserDataExportDto,
-    @Res({ passthrough: false }) res: Response,
-    @Req() { user }
-  ) {
-    const file = await this.userService.exportUserDataAsJsonOrExcelFile(format, user.id, res);
-    file.getStream().pipe(res);
-  }
-
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get User Data' })
-  @ApiResponse({ status: 200, description: 'User data fetched successfully' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 500, description: 'Internal Server Error' })
   @Get(':id')
-  async getUserDataById(@Param('id') id: string) {
-    return this.userService.getUserDataWithoutPasswordById(id);
+  @ApiOperation({ summary: 'Get a user by id' })
+  @ApiResponse({ status: HttpStatus.OK, description: SYS_MSG.REQUEST_SUCCESSFUL })
+  @ApiResponse({ status: HttpStatus.NOT_FOUND, description: SYS_MSG.USER_NOT_FOUND })
+  async getById(@Param('id', ParseUUIDPipe) id: string) {
+    const user = await this.userService.getUserById(id);
+    return {
+      status_code: HttpStatus.OK,
+      message: SYS_MSG.REQUEST_SUCCESSFUL,
+      data: {
+        id: user.id,
+        full_name: user.full_name,
+        email: user.email,
+        country: user.country,
+        avatar_url: user.avatar_url,
+        is_active: user.is_active,
+        is_verified: user.is_verified,
+        created_at: user.created_at,
+      },
+    };
   }
 
-  @UseGuards(SuperAdminGuard)
-  @Get()
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get all users (Super Admin only)' })
-  @ApiResponse({ status: 200, description: 'Users retrieved successfully' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 403, description: 'Forbidden' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  async getAllUsers(
-    @Request() req: { user: UserPayload },
-    @Query('page') page: number = 1,
-    @Query('limit') limit: number = 10
-  ) {
-    return this.userService.getUsersByAdmin(page, limit, req.user);
-  }
-
-  @Patch(':userId/status')
-  @ApiOperation({ summary: 'Update a user status (Super Admin only)' })
-  @ApiOkResponse({ description: 'Status updated successfully', type: UpdateUserStatusResponseDto })
-  @ApiUnauthorizedResponse({
-    description: 'User is not authorized',
-    type: 'object',
-    example: {
-      message: 'User is currently unauthorized, kindly authenticate to continue',
-      status: 401,
-    },
-  })
-  @ApiForbiddenResponse({
-    description: 'User is forbidden',
-    example: {
-      message: 'You dont have the permission to perform this action',
-      status: 403,
-    },
-  })
-  @ApiInternalServerErrorResponse({ description: 'Internal Server Error' })
-  @UseGuards(SuperAdminGuard)
-  async updateUserStatus(@Param('userId', ParseUUIDPipe) userId: string, @Body() { status }: UpdateUserStatusDto) {
-    return this.userService.updateUserStatus(userId, status);
-  }
-
-  @Delete(':userId')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Soft delete a user account' })
-  @ApiResponse({ status: 204, description: 'Deletion in progress' })
-  @ApiResponse({ status: 400, description: 'Bad Request' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 500, description: 'Internal Server Error' })
-  async softDeleteUser(@Param('userId', ParseUUIDPipe) userId: string, @Req() req) {
-    const authenticatedUserId = req['user'].id;
-
-    return this.userService.softDeleteUser(userId, authenticatedUserId);
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Soft delete the authenticated user account' })
+  @ApiResponse({ status: HttpStatus.OK, description: SYS_MSG.USER_DELETED })
+  async softDelete(@Param('id', ParseUUIDPipe) id: string, @Req() request: Request) {
+    const requester = request['user'] as { id: string };
+    return this.userService.softDeleteUser(id, requester.id);
   }
 }

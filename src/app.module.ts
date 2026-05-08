@@ -16,9 +16,13 @@ import HealthController from './health.controller';
 import { AuthModule } from '@modules/auth/auth.module';
 import { EmailModule } from '@modules/email/email.module';
 import { NotificationsModule } from '@modules/notifications/notifications.module';
-import { OtpModule } from '@modules/otp/otp.module';
-import { ProfileModule } from '@modules/profile/profile.module';
 import { UserModule } from '@modules/user/user.module';
+import { WaitlistModule } from '@modules/waitlist/waitlist.module';
+import { UploadedDocumentsModule } from '@modules/uploaded-documents/uploaded-documents.module';
+import { StrategiesModule } from '@modules/strategies/strategies.module';
+import { FunnelsModule } from '@modules/funnels/funnels.module';
+import { WeeklyLogsModule } from '@modules/weekly-logs/weekly-logs.module';
+import { SubscriptionsModule } from '@modules/subscriptions/subscriptions.module';
 import ProbeController from './probe.controller';
 import { RunTestsModule } from './run-tests/run-tests.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
@@ -47,12 +51,6 @@ import s3Config from '@config/s3.config';
   ],
   imports: [
     ConfigModule.forRoot({
-      /*
-       * By default, the package looks for a env file in the root directory of the application.
-       * We don't use ".env" file because it is prioritize as the same level as real environment variables.
-       * To specify multiple. env files, set the envFilePath property.
-       * If a variable is found in multiple files, the first one takes precedence.
-       */
       envFilePath: ['.env.development.local', `.env.${process.env.PROFILE}`],
       isGlobal: true,
       load: [serverConfig, authConfig, s3Config],
@@ -72,9 +70,7 @@ import s3Config from '@config/s3.config';
     SeedingModule,
     AuthModule,
     UserModule,
-    OtpModule,
     EmailModule,
-
     MailerModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
@@ -109,11 +105,14 @@ import s3Config from '@config/s3.config';
         },
       }),
     }),
-
     NotificationsModule,
-    ProfileModule,
     RunTestsModule,
-    NotificationsModule,
+    WaitlistModule,
+    UploadedDocumentsModule,
+    StrategiesModule,
+    FunnelsModule,
+    WeeklyLogsModule,
+    SubscriptionsModule,
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, 'uploads'),
       serveRoot: '/uploads',
