@@ -1,24 +1,44 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, OnModuleInit } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
+import authConfig from '@config/auth.config';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
+import { AuthMetadata } from './entities/auth-metadata.entity';
+import { UserSession } from './entities/user-session.entity';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_MINUTES = 15;
+const REFRESH_TOKEN_EXPIRY_DAYS = 7;
 const OTP_LENGTH = 6;
 const OTP_EXPIRY_MINUTES = 10;
 
 @Injectable()
-export default class AuthenticationService {
+export default class AuthenticationService implements OnModuleInit {
+  private dummyHash = '';
+
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    private readonly jwtService: JwtService
+    @InjectRepository(AuthMetadata)
+    private readonly authMetadataRepository: Repository<AuthMetadata>,
+    @InjectRepository(UserSession)
+    private readonly userSessionRepository: Repository<UserSession>,
+    private readonly jwtService: JwtService,
+    private readonly dataSource: DataSource
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    // Pre-compute once at startup so every failed lookup runs a real bcrypt compare,
+    // making response time identical whether the user exists or not.
+    this.dummyHash = await bcrypt.hash('__timing_safety_dummy__', 10);
+  }
 
   async createNewUser(createUserDto: CreateUserDTO) {
     const existing = await this.userRepository.findOne({ where: { email: createUserDto.email } });
@@ -55,32 +75,44 @@ export default class AuthenticationService {
     };
   }
 
-  async loginUser(loginDto: LoginDto) {
+  async loginUser(loginDto: LoginDto): Promise<object> {
     const user = await this.userRepository.findOne({ where: { email: loginDto.email } });
+
+    // Run dummy bcrypt so response time is the same whether the email exists or not.
+    // This prevents user enumeration via timing.
     if (!user || !user.password) {
+      await bcrypt.compare(loginDto.password, this.dummyHash);
       throw new CustomHttpException(SYS_MSG.INVALID_CREDENTIALS, HttpStatus.UNAUTHORIZED);
+    }
+
+    const meta = await this.loadOrCreateMeta(user.id);
+
+    // Lockout check must happen BEFORE bcrypt to deny locked accounts immediately.
+    // Comparison is done in the DB using CURRENT_TIMESTAMP so both sides share the
+    // same timezone — avoids bugs from TIMESTAMP WITHOUT TIME ZONE being misread
+    // as local time by the Node.js pg driver.
+    const lockResult = await this.dataSource.query<{ is_locked: boolean; seconds_remaining: number }[]>(
+      `SELECT locked_until > CURRENT_TIMESTAMP AS is_locked,
+              CEIL(EXTRACT(EPOCH FROM (locked_until - CURRENT_TIMESTAMP))) AS seconds_remaining
+       FROM auth_metadata WHERE id = $1`,
+      [meta.id]
+    );
+    const lock = lockResult[0];
+    if (lock?.is_locked) {
+      throw new CustomHttpException(
+        `Account locked. Try again in ${lock.seconds_remaining} seconds.`,
+        HttpStatus.FORBIDDEN
+      );
     }
 
     const isMatch = await bcrypt.compare(loginDto.password, user.password);
+
     if (!isMatch) {
+      await this.recordFailedAttempt(meta.id);
       throw new CustomHttpException(SYS_MSG.INVALID_CREDENTIALS, HttpStatus.UNAUTHORIZED);
     }
 
-    const access_token = this.jwtService.sign({ id: user.id, sub: user.id, email: user.email });
-
-    return {
-      status_code: HttpStatus.OK,
-      message: SYS_MSG.LOGIN_SUCCESSFUL,
-      access_token,
-      data: {
-        user: {
-          id: user.id,
-          full_name: user.full_name,
-          email: user.email,
-          avatar_url: user.avatar_url,
-        },
-      },
-    };
+    return this.createSession(user, meta.id);
   }
 
   async changePassword(userId: string, oldPassword: string, newPassword: string) {
@@ -96,10 +128,91 @@ export default class AuthenticationService {
     user.password = await bcrypt.hash(newPassword, 10);
     await this.userRepository.save(user);
 
-    return {
-      status_code: HttpStatus.OK,
-      message: SYS_MSG.PASSWORD_UPDATED,
-    };
+    return { status_code: HttpStatus.OK, message: SYS_MSG.PASSWORD_UPDATED };
+  }
+
+  private async loadOrCreateMeta(userId: string): Promise<AuthMetadata> {
+    const existing = await this.authMetadataRepository.findOne({ where: { user_id: userId } });
+    if (existing) return existing;
+    return this.authMetadataRepository.save(
+      this.authMetadataRepository.create({ user_id: userId, failed_attempts: 0 })
+    );
+  }
+
+  private async recordFailedAttempt(metaId: string): Promise<void> {
+    // Single atomic UPDATE avoids race conditions — no separate SELECT needed.
+    // locked_until uses CURRENT_TIMESTAMP (DB server time) to avoid clock drift
+    // across distributed nodes.
+    await this.dataSource.query(
+      `UPDATE auth_metadata
+       SET failed_attempts = failed_attempts + 1,
+           locked_until = CASE
+             WHEN failed_attempts + 1 >= $1
+             THEN CURRENT_TIMESTAMP + ($2 || ' minutes')::interval
+             ELSE locked_until
+           END
+       WHERE id = $3`,
+      [MAX_FAILED_ATTEMPTS, String(LOCKOUT_MINUTES), metaId]
+    );
+  }
+
+  private async createSession(user: User, metaId: string): Promise<object> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      await queryRunner.query(
+        `UPDATE auth_metadata
+         SET failed_attempts = 0, locked_until = NULL, last_login_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [metaId]
+      );
+
+      const refreshToken = randomBytes(32).toString('hex');
+      const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+
+      const session = queryRunner.manager.create(UserSession, {
+        user_id: user.id,
+        refresh_token: refreshToken,
+        expires_at: refreshExpiresAt,
+        is_revoked: false,
+      });
+      const savedSession = await queryRunner.manager.save(UserSession, session);
+
+      await queryRunner.commitTransaction();
+
+      const jwtExpirySeconds = +(authConfig().jwtExpiry ?? 3600);
+      const tokenExpiresAt = new Date(Date.now() + jwtExpirySeconds * 1000);
+
+      const access_token = this.jwtService.sign({
+        sub: user.id,
+        id: user.id,
+        email: user.email,
+        sid: savedSession.id,
+      });
+
+      return {
+        status_code: HttpStatus.OK,
+        message: SYS_MSG.LOGIN_SUCCESSFUL,
+        data: {
+          access_token,
+          refresh_token: refreshToken,
+          expires_at: tokenExpiresAt.toISOString(),
+          user: {
+            id: user.id,
+            full_name: user.full_name,
+            email: user.email,
+            avatar_url: user.avatar_url,
+          },
+        },
+      };
+    } catch {
+      await queryRunner.rollbackTransaction();
+      throw new CustomHttpException(SYS_MSG.ERROR_OCCURED, HttpStatus.INTERNAL_SERVER_ERROR);
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   private generateOtp(): string {

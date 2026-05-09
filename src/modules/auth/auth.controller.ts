@@ -29,8 +29,12 @@ export default class RegistrationController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Log a user in' })
   @ApiBody({ type: LoginDto })
-  @ApiResponse({ status: HttpStatus.OK, description: SYS_MSG.LOGIN_SUCCESSFUL })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Returns access_token (JWT with sid), refresh_token, expires_at, and user object.',
+  })
   @ApiResponse({ status: HttpStatus.UNAUTHORIZED, description: SYS_MSG.INVALID_CREDENTIALS })
+  @ApiResponse({ status: HttpStatus.FORBIDDEN, description: 'Account locked. Returns remaining seconds in message.' })
   async login(@Body() loginDto: LoginDto) {
     return this.authService.loginUser(loginDto);
   }
