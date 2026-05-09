@@ -26,6 +26,7 @@ import { SubscriptionsModule } from '@modules/subscriptions/subscriptions.module
 import ProbeController from './probe.controller';
 import { RunTestsModule } from './run-tests/run-tests.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
+import { RedisModule } from '@modules/redis/redis.module';
 import { join } from 'path';
 import { ApiStatusModule } from '@modules/api-status/api-status.module';
 import s3Config from '@config/s3.config';
@@ -122,6 +123,7 @@ import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.ad
       },
     }),
     ApiStatusModule,
+    RedisModule,
   ],
   controllers: [HealthController, ProbeController],
 })
