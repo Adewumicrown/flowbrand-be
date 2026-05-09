@@ -10,6 +10,7 @@ import { AuthMetadata } from './entities/auth-metadata.entity';
 import { UserSession } from './entities/user-session.entity';
 import type { StringValue } from 'ms';
 
+const expiry = authConfig().jwtExpiry;
 @Module({
   controllers: [RegistrationController],
   providers: [AuthenticationService],
@@ -20,7 +21,7 @@ import type { StringValue } from 'ms';
       global: true,
       secret: authConfig().jwtSecret,
       signOptions: {
-        expiresIn: authConfig().jwtExpiry as StringValue | number,
+        expiresIn: `${expiry}` as unknown as StringValue,
       },
     }),
   ],

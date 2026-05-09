@@ -121,13 +121,15 @@ export class EmailService {
 
   async createTemplate(templateInfo: createTemplateDto) {
     try {
-      const validationResult = await this.htmlValidator.validateString(templateInfo.template);
+      const compiledHtml = Handlebars.compile(templateInfo.template)({});
+
+      const validationResult = await this.htmlValidator.validateString(compiledHtml);
 
       const filteredMessages = validationResult.results[0].messages.filter(
         message =>
           !(
-            (message.message.includes('Trailing slash on void elements has no effect') && message.severity === 1) ||
-            (message.message.includes('Consider adding a "lang" attribute') && message.severity === 1)
+            (message.ruleId === 'no-trailing-slashes' && message.severity === 1) ||
+            (message.ruleId === 'element-required-attribute' && message.severity === 1)
           )
       );
 
@@ -162,6 +164,7 @@ export class EmailService {
 
   async updateTemplate(templateName: string, templateInfo: UpdateTemplateDto) {
     const html = Handlebars.compile(templateInfo.template)({});
+    this.htmlValidator.validateString(html);
 
     const validationResult = await this.htmlValidator.validateString(html);
 
