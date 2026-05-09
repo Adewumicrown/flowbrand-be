@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import Redis, { RedisOptions } from 'ioredis';
 import authConfig from '@config/auth.config';
+import * as SYS_MSG from '@shared/constants/SystemMessages';
 
 @Injectable()
 export class RedisService implements OnModuleInit, OnModuleDestroy {
@@ -20,11 +21,11 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       enableOfflineQueue: false,
       retryStrategy: (times: number) => {
         if (times > 5) {
-          this.logger.error(`Redis retry limit reached after ${times} attempts.`);
+          this.logger.error(SYS_MSG.REDIS_MESSAGES.RETRY_LIMIT_REACHED);
           return null;
         }
         const delay = Math.min(times * 200, 2000); // 2s max delay
-        this.logger.warn(`Redis reconnect attempt #${times} in ${delay}ms`);
+        this.logger.warn(SYS_MSG.REDIS_MESSAGES.RECONNECT_ATTEMPT(times, delay));
         return delay;
       },
     };
@@ -36,17 +37,14 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     this.client.on('close', () => this.logger.warn('Redis connection closed'));
     this.client.on('error', (err: Error) => {
       if (err.message.includes('OOM')) {
-        this.logger.error('CRITICAL: Redis out of memory.', err.message);
+        this.logger.error(SYS_MSG.REDIS_MESSAGES.CRITICAL_OOM, err.message);
       } else {
-        this.logger.error('Redis client error', err.message);
+        this.logger.error(SYS_MSG.REDIS_MESSAGES.CLIENT_ERROR, err.message);
       }
     });
 
     this.client.connect().catch(err => {
-      this.logger.error(
-        'Redis initial connection failed. App will continue; Redis-dependent features may degrade.',
-        err.message
-      );
+      this.logger.error(SYS_MSG.REDIS_MESSAGES.INITIAL_CONNECTION_FAILED, err.message);
     });
   }
 
@@ -110,7 +108,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
       if (keysToDelete.length > 0) {
         await this.client.del(...keysToDelete);
-        this.logger.log(`delByPattern: deleted ${keysToDelete.length} keys matching [${pattern}]`);
+        this.logger.log(SYS_MSG.REDIS_MESSAGES.PATTERN_DELETE_SUCCESS(keysToDelete.length, pattern));
       }
     } catch (err) {
       this.logger.error(`delByPattern failed [pattern=${pattern}]`, (err as Error).message);
@@ -119,6 +117,6 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
   onModuleDestroy() {
     this.client?.disconnect();
-    this.logger.log('Redis client disconnected');
+    this.logger.log(SYS_MSG.REDIS_MESSAGES.CONNECTION_CLOSED);
   }
 }
