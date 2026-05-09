@@ -1,6 +1,6 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import * as Handlebars from 'handlebars';
-import * as htmlValidator from 'html-validator';
+import { HtmlValidate } from 'html-validate';
 import * as fs from 'fs';
 import { promisify } from 'util';
 import * as path from 'path';
@@ -15,7 +15,18 @@ import { getFile, createFile, deleteFile } from '@shared/helpers/fileHelpers';
 
 @Injectable()
 export class EmailService {
-  constructor(private readonly mailerService: QueueService) {}
+  private readonly htmlValidator: HtmlValidate;
+
+  constructor(private readonly mailerService: QueueService) {
+    this.htmlValidator = new HtmlValidate({
+      extends: ['html-validate:recommended'],
+      rules: {
+        'no-trailing-slashes': 'error',
+        'doctype-first': 'off',
+        'no-inline-style': 'off',
+      },
+    });
+  }
 
   async sendUserConfirmationMail(email: string, name: string, url: string, token: string) {
     const link = `${url}?token=${token}`;
@@ -110,13 +121,13 @@ export class EmailService {
 
   async createTemplate(templateInfo: createTemplateDto) {
     try {
-      const validationResult = await htmlValidator({ data: templateInfo.template });
+      const validationResult = await this.htmlValidator.validateString(templateInfo.template);
 
-      const filteredMessages = validationResult.messages.filter(
+      const filteredMessages = validationResult.results[0].messages.filter(
         message =>
           !(
-            (message.message.includes('Trailing slash on void elements has no effect') && message.type === 'info') ||
-            (message.message.includes('Consider adding a “lang” attribute') && message.subType === 'warning')
+            (message.message.includes('Trailing slash on void elements has no effect') && message.severity === 1) ||
+            (message.message.includes('Consider adding a "lang" attribute') && message.severity === 1)
           )
       );
 
@@ -152,13 +163,13 @@ export class EmailService {
   async updateTemplate(templateName: string, templateInfo: UpdateTemplateDto) {
     const html = Handlebars.compile(templateInfo.template)({});
 
-    const validationResult = await htmlValidator({ data: html });
+    const validationResult = await this.htmlValidator.validateString(html);
 
-    const filteredMessages = validationResult.messages.filter(
+    const filteredMessages = validationResult.results[0].messages.filter(
       message =>
         !(
-          (message.message.includes('Trailing slash on void elements has no effect') && message.type === 'info') ||
-          (message.message.includes('Consider adding a “lang” attribute') && message.subType === 'warning')
+          (message.message.includes('Trailing slash on void elements has no effect') && message.severity === 1) ||
+          (message.message.includes('Consider adding a "lang" attribute') && message.severity === 1)
         )
     );
 
