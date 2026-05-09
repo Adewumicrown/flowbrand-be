@@ -12,6 +12,7 @@ import { AuthMetadata } from './entities/auth-metadata.entity';
 import { UserSession } from './entities/user-session.entity';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
+import { RedisService } from '@modules/redis/services/redis.service';
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
@@ -31,7 +32,8 @@ export default class AuthenticationService implements OnModuleInit {
     @InjectRepository(UserSession)
     private readonly userSessionRepository: Repository<UserSession>,
     private readonly jwtService: JwtService,
-    private readonly dataSource: DataSource
+    private readonly dataSource: DataSource,
+    private readonly redisService: RedisService
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -76,12 +78,20 @@ export default class AuthenticationService implements OnModuleInit {
   }
 
   async loginUser(loginDto: LoginDto): Promise<object> {
+    // Fast-path: check Redis before hitting the DB. If the key exists and count >= threshold,
+    // the account is locked — no need to load the user row at all.
+    const redisFailCount = await this.redisService.get(`fail:${loginDto.email}`);
+    if (redisFailCount !== null && +redisFailCount >= MAX_FAILED_ATTEMPTS) {
+      throw new CustomHttpException(`Account locked. Please try again later.`, HttpStatus.FORBIDDEN);
+    }
+
     const user = await this.userRepository.findOne({ where: { email: loginDto.email } });
 
     // Run dummy bcrypt so response time is the same whether the email exists or not.
     // This prevents user enumeration via timing.
     if (!user || !user.password) {
       await bcrypt.compare(loginDto.password, this.dummyHash);
+      await this.incrementRedisFailCounter(loginDto.email);
       throw new CustomHttpException(SYS_MSG.INVALID_CREDENTIALS, HttpStatus.UNAUTHORIZED);
     }
 
@@ -108,11 +118,11 @@ export default class AuthenticationService implements OnModuleInit {
     const isMatch = await bcrypt.compare(loginDto.password, user.password);
 
     if (!isMatch) {
-      await this.recordFailedAttempt(meta.id);
+      await this.recordFailedAttempt(meta.id, loginDto.email);
       throw new CustomHttpException(SYS_MSG.INVALID_CREDENTIALS, HttpStatus.UNAUTHORIZED);
     }
 
-    return this.createSession(user, meta.id);
+    return this.createSession(user, meta.id, loginDto.email);
   }
 
   async changePassword(userId: string, oldPassword: string, newPassword: string) {
@@ -139,7 +149,7 @@ export default class AuthenticationService implements OnModuleInit {
     );
   }
 
-  private async recordFailedAttempt(metaId: string): Promise<void> {
+  private async recordFailedAttempt(metaId: string, email: string): Promise<void> {
     // Single atomic UPDATE avoids race conditions — no separate SELECT needed.
     // locked_until uses CURRENT_TIMESTAMP (DB server time) to avoid clock drift
     // across distributed nodes.
@@ -154,9 +164,18 @@ export default class AuthenticationService implements OnModuleInit {
        WHERE id = $3`,
       [MAX_FAILED_ATTEMPTS, String(LOCKOUT_MINUTES), metaId]
     );
+
+    await this.incrementRedisFailCounter(email);
   }
 
-  private async createSession(user: User, metaId: string): Promise<object> {
+  private async incrementRedisFailCounter(email: string): Promise<void> {
+    const count = await this.redisService.incr(`fail:${email}`);
+    if (count === 1) {
+      await this.redisService.set(`fail:${email}`, '1', LOCKOUT_MINUTES * 60);
+    }
+  }
+
+  private async createSession(user: User, metaId: string, email: string): Promise<object> {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -183,6 +202,13 @@ export default class AuthenticationService implements OnModuleInit {
       await queryRunner.commitTransaction();
 
       const jwtExpirySeconds = +(authConfig().jwtExpiry ?? 3600);
+
+      // Clear the Redis fail counter and register the active session — fire-and-forget,
+      // failures here don't affect the login response.
+      await Promise.all([
+        this.redisService.del(`fail:${email}`),
+        this.redisService.set(`active_session:${savedSession.id}`, user.id, jwtExpirySeconds),
+      ]);
       const tokenExpiresAt = new Date(Date.now() + jwtExpirySeconds * 1000);
 
       const access_token = this.jwtService.sign({
