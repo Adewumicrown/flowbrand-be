@@ -13,7 +13,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
     const options: RedisOptions = {
       host,
-      port: +port,
+      port: port ? Number(port) : 6379,
       ...(password && { password }),
       ...(username && { username }),
       connectTimeout: 5000, // 5secs
@@ -52,7 +52,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     try {
       return await this.client.get(key);
     } catch (err) {
-      this.logger.error(`GET failed [key=${key}]`, (err as Error).message);
+      this.logger.error(`GET failed`, (err as Error).message);
       return null;
     }
   }
@@ -65,7 +65,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
         await this.client.set(key, value);
       }
     } catch (err) {
-      this.logger.error(`SET failed [key=${key}]`, (err as Error).message);
+      this.logger.error(`SET failed`, (err as Error).message);
     }
   }
 
@@ -73,7 +73,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.client.del(key);
     } catch (err) {
-      this.logger.error(`DEL failed [key=${key}]`, (err as Error).message);
+      this.logger.error(`DEL failed`, (err as Error).message);
     }
   }
 
@@ -81,7 +81,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     try {
       return (await this.client.exists(key)) === 1;
     } catch (err) {
-      this.logger.error(`EXISTS failed [key=${key}]`, (err as Error).message);
+      this.logger.error(`EXISTS failed`, (err as Error).message);
       return false;
     }
   }
@@ -90,7 +90,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     try {
       return await this.client.incr(key);
     } catch (err) {
-      this.logger.error(`INCR failed [key=${key}]`, (err as Error).message);
+      this.logger.error(`INCR failed`, (err as Error).message);
       return null;
     }
   }
@@ -111,12 +111,12 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(SYS_MSG.REDIS_MESSAGES.PATTERN_DELETE_SUCCESS(keysToDelete.length, pattern));
       }
     } catch (err) {
-      this.logger.error(`delByPattern failed [pattern=${pattern}]`, (err as Error).message);
+      this.logger.error(`delByPattern failed`, (err as Error).message);
     }
   }
 
-  onModuleDestroy() {
-    this.client?.disconnect();
+  async onModuleDestroy() {
+    await this.client?.quit();
     this.logger.log(SYS_MSG.REDIS_MESSAGES.CONNECTION_CLOSED);
   }
 }

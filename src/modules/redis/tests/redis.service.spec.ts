@@ -12,6 +12,7 @@ const mockRedisInstance = {
   incr: jest.fn(),
   scan: jest.fn(),
   disconnect: jest.fn(),
+  quit: jest.fn().mockResolvedValue('OK'),
 };
 
 jest.mock('ioredis', () => {
