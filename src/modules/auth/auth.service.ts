@@ -183,70 +183,60 @@ export default class AuthenticationService implements OnModuleInit {
   }
 
   private async createSession(user: User, metaId: string, email: string, ip: string): Promise<object> {
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    const refreshToken = randomBytes(32).toString('hex');
+    const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
 
-    try {
-      await queryRunner.query(
-        `UPDATE auth_metadata
-         SET failed_attempts = 0, locked_until = NULL, last_login_at = CURRENT_TIMESTAMP
-         WHERE id = $1`,
-        [metaId]
-      );
-
-      const refreshToken = randomBytes(32).toString('hex');
-      const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
-
-      const session = queryRunner.manager.create(UserSession, {
-        user_id: user.id,
-        refresh_token: refreshToken,
-        expires_at: refreshExpiresAt,
-        is_revoked: false,
-      });
-      const savedSession = await queryRunner.manager.save(UserSession, session);
-
-      await queryRunner.commitTransaction();
-
-      const jwtExpirySeconds = +(authConfig().jwtExpiry ?? 3600);
-
-      // Clear the Redis fail counter and register the active session — fire-and-forget,
-      // failures here don't affect the login response.
-      await Promise.all([
-        this.redisService.del(`fail:${email}`),
-        this.redisService.set(`active_session:${savedSession.id}`, user.id, jwtExpirySeconds),
-      ]);
-      this.auditLog('login_success', email, ip);
-      const tokenExpiresAt = new Date(Date.now() + jwtExpirySeconds * 1000);
-
-      const access_token = this.jwtService.sign({
-        sub: user.id,
-        id: user.id,
-        email: user.email,
-        sid: savedSession.id,
-      });
-
-      return {
-        status_code: HttpStatus.OK,
-        message: SYS_MSG.LOGIN_SUCCESSFUL,
-        data: {
-          access_token,
+    const savedSession = await this.dataSource.manager
+      .transaction(async em => {
+        await em.query(
+          `UPDATE auth_metadata
+           SET failed_attempts = 0, locked_until = NULL, last_login_at = CURRENT_TIMESTAMP
+           WHERE id = $1`,
+          [metaId]
+        );
+        const session = em.create(UserSession, {
+          user_id: user.id,
           refresh_token: refreshToken,
-          expires_at: tokenExpiresAt.toISOString(),
-          user: {
-            id: user.id,
-            full_name: user.full_name,
-            email: user.email,
-            avatar_url: user.avatar_url,
-          },
+          expires_at: refreshExpiresAt,
+          is_revoked: false,
+        });
+        return em.save(UserSession, session);
+      })
+      .catch(() => {
+        throw new CustomHttpException(SYS_MSG.ERROR_OCCURED, HttpStatus.INTERNAL_SERVER_ERROR);
+      });
+
+    const jwtExpirySeconds = +(authConfig().jwtExpiry ?? 3600);
+
+    await Promise.all([
+      this.redisService.del(`fail:${email}`),
+      this.redisService.set(`active_session:${savedSession.id}`, user.id, jwtExpirySeconds),
+    ]);
+    this.auditLog('login_success', email, ip);
+
+    const tokenExpiresAt = new Date(Date.now() + jwtExpirySeconds * 1000);
+    const access_token = this.jwtService.sign({
+      sub: user.id,
+      id: user.id,
+      email: user.email,
+      sid: savedSession.id,
+    });
+
+    return {
+      status_code: HttpStatus.OK,
+      message: SYS_MSG.LOGIN_SUCCESSFUL,
+      data: {
+        access_token,
+        refresh_token: refreshToken,
+        expires_at: tokenExpiresAt.toISOString(),
+        user: {
+          id: user.id,
+          full_name: user.full_name,
+          email: user.email,
+          avatar_url: user.avatar_url,
         },
-      };
-    } catch {
-      await queryRunner.rollbackTransaction();
-      throw new CustomHttpException(SYS_MSG.ERROR_OCCURED, HttpStatus.INTERNAL_SERVER_ERROR);
-    } finally {
-      await queryRunner.release();
-    }
+      },
+    };
   }
 
   private generateOtp(): string {
