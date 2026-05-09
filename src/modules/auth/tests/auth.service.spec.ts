@@ -95,7 +95,10 @@ describe('AuthenticationService', () => {
       });
       jwtServiceMock.sign.mockReturnValueOnce('jwt');
 
-      const result = (await service.loginUser({ email: 'jane@example.com', password }, '127.0.0.1')) as Record<string, unknown>;
+      const result = (await service.loginUser({ email: 'jane@example.com', password }, '127.0.0.1')) as Record<
+        string,
+        unknown
+      >;
 
       expect(result.message).toBe(SYS_MSG.LOGIN_SUCCESSFUL);
       expect(result.access_token).toBe('jwt');
@@ -103,7 +106,9 @@ describe('AuthenticationService', () => {
 
     it('rejects unknown emails', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce(null);
-      await expect(service.loginUser({ email: 'x@y.z', password: 'pass' }, '127.0.0.1')).rejects.toThrow(CustomHttpException);
+      await expect(service.loginUser({ email: 'x@y.z', password: 'pass' }, '127.0.0.1')).rejects.toThrow(
+        CustomHttpException
+      );
     });
 
     it('rejects bad passwords', async () => {
