@@ -145,11 +145,11 @@ export default class AuthenticationService implements OnModuleInit {
   }
 
   private async loadOrCreateMeta(userId: string): Promise<AuthMetadata> {
-    const existing = await this.authMetadataRepository.findOne({ where: { user_id: userId } });
-    if (existing) return existing;
-    return this.authMetadataRepository.save(
-      this.authMetadataRepository.create({ user_id: userId, failed_attempts: 0 })
+    await this.authMetadataRepository.upsert(
+      { user_id: userId, failed_attempts: 0 },
+      { conflictPaths: ['user_id'], skipUpdateIfNoValuesChanged: true }
     );
+    return this.authMetadataRepository.findOneBy({ user_id: userId });
   }
 
   private async recordFailedAttempt(metaId: string, email: string): Promise<void> {
