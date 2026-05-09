@@ -13,6 +13,9 @@ export class AuthMetadata {
   @JoinColumn({ name: 'user_id' })
   user: User;
 
+  @Column({ type: 'integer', nullable: false, default: 0 })
+  failed_attempts: number;
+
   @Column({ type: 'timestamp', nullable: true })
   locked_until: Date | null;
 
