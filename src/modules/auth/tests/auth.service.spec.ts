@@ -95,7 +95,7 @@ describe('AuthenticationService', () => {
       });
       jwtServiceMock.sign.mockReturnValueOnce('jwt');
 
-      const result = await service.loginUser({ email: 'jane@example.com', password });
+      const result = (await service.loginUser({ email: 'jane@example.com', password }, '127.0.0.1')) as Record<string, unknown>;
 
       expect(result.message).toBe(SYS_MSG.LOGIN_SUCCESSFUL);
       expect(result.access_token).toBe('jwt');
@@ -103,7 +103,7 @@ describe('AuthenticationService', () => {
 
     it('rejects unknown emails', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce(null);
-      await expect(service.loginUser({ email: 'x@y.z', password: 'pass' })).rejects.toThrow(CustomHttpException);
+      await expect(service.loginUser({ email: 'x@y.z', password: 'pass' }, '127.0.0.1')).rejects.toThrow(CustomHttpException);
     });
 
     it('rejects bad passwords', async () => {
@@ -116,7 +116,7 @@ describe('AuthenticationService', () => {
         password: hashed,
       });
       await expect(
-        service.loginUser({ email: 'jane@example.com', password: 'wrong-password' })
+        service.loginUser({ email: 'jane@example.com', password: 'wrong-password' }, '127.0.0.1')
       ).rejects.toThrow(CustomHttpException);
     });
 
@@ -126,7 +126,7 @@ describe('AuthenticationService', () => {
         email: 'jane@example.com',
         password: null,
       });
-      await expect(service.loginUser({ email: 'jane@example.com', password: 'anything' })).rejects.toThrow(
+      await expect(service.loginUser({ email: 'jane@example.com', password: 'anything' }, '127.0.0.1')).rejects.toThrow(
         CustomHttpException
       );
     });

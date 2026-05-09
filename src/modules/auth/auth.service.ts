@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable, OnModuleInit } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -22,6 +22,7 @@ const OTP_EXPIRY_MINUTES = 10;
 
 @Injectable()
 export default class AuthenticationService implements OnModuleInit {
+  private readonly logger = new Logger(AuthenticationService.name);
   private dummyHash = '';
 
   constructor(
@@ -77,7 +78,7 @@ export default class AuthenticationService implements OnModuleInit {
     };
   }
 
-  async loginUser(loginDto: LoginDto): Promise<object> {
+  async loginUser(loginDto: LoginDto, ip: string): Promise<object> {
     // Fast-path: check Redis before hitting the DB. If the key exists and count >= threshold,
     // the account is locked — no need to load the user row at all.
     const redisFailCount = await this.redisService.get(`fail:${loginDto.email}`);
@@ -92,6 +93,7 @@ export default class AuthenticationService implements OnModuleInit {
     if (!user || !user.password) {
       await bcrypt.compare(loginDto.password, this.dummyHash);
       await this.incrementRedisFailCounter(loginDto.email);
+      this.auditLog('login_failed', loginDto.email, ip, 'email_not_found');
       throw new CustomHttpException(SYS_MSG.INVALID_CREDENTIALS, HttpStatus.UNAUTHORIZED);
     }
 
@@ -119,10 +121,11 @@ export default class AuthenticationService implements OnModuleInit {
 
     if (!isMatch) {
       await this.recordFailedAttempt(meta.id, loginDto.email);
+      this.auditLog('login_failed', loginDto.email, ip, 'wrong_password');
       throw new CustomHttpException(SYS_MSG.INVALID_CREDENTIALS, HttpStatus.UNAUTHORIZED);
     }
 
-    return this.createSession(user, meta.id, loginDto.email);
+    return this.createSession(user, meta.id, loginDto.email, ip);
   }
 
   async changePassword(userId: string, oldPassword: string, newPassword: string) {
@@ -168,6 +171,10 @@ export default class AuthenticationService implements OnModuleInit {
     await this.incrementRedisFailCounter(email);
   }
 
+  private auditLog(event: 'login_failed' | 'login_success', email: string, ip: string, reason?: string): void {
+    this.logger.log({ event, email, ip, ...(reason && { reason }), timestamp: new Date().toISOString() });
+  }
+
   private async incrementRedisFailCounter(email: string): Promise<void> {
     const count = await this.redisService.incr(`fail:${email}`);
     if (count === 1) {
@@ -175,7 +182,7 @@ export default class AuthenticationService implements OnModuleInit {
     }
   }
 
-  private async createSession(user: User, metaId: string, email: string): Promise<object> {
+  private async createSession(user: User, metaId: string, email: string, ip: string): Promise<object> {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -209,6 +216,7 @@ export default class AuthenticationService implements OnModuleInit {
         this.redisService.del(`fail:${email}`),
         this.redisService.set(`active_session:${savedSession.id}`, user.id, jwtExpirySeconds),
       ]);
+      this.auditLog('login_success', email, ip);
       const tokenExpiresAt = new Date(Date.now() + jwtExpirySeconds * 1000);
 
       const access_token = this.jwtService.sign({

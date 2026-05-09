@@ -35,8 +35,8 @@ export default class RegistrationController {
   })
   @ApiResponse({ status: HttpStatus.UNAUTHORIZED, description: SYS_MSG.INVALID_CREDENTIALS })
   @ApiResponse({ status: HttpStatus.FORBIDDEN, description: 'Account locked. Returns remaining seconds in message.' })
-  async login(@Body() loginDto: LoginDto) {
-    return this.authService.loginUser(loginDto);
+  async login(@Body() loginDto: LoginDto, @Req() request: Request) {
+    return this.authService.loginUser(loginDto, request.ip ?? 'unknown');
   }
 
   @ApiBearerAuth()
