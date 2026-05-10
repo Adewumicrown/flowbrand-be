@@ -1,5 +1,5 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
-import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { skipAuth } from '@shared/helpers/skipAuth';
@@ -7,6 +7,7 @@ import AuthenticationService from './auth.service';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { LoginDocs, ChangePasswordDocs } from './docs/auth-swagger.doc';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -26,25 +27,13 @@ export default class RegistrationController {
 
   @skipAuth()
   @Post('login')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Log a user in' })
-  @ApiBody({ type: LoginDto })
-  @ApiResponse({
-    status: HttpStatus.OK,
-    description: 'Returns access_token (JWT with sid), refresh_token, expires_at, and user object.',
-  })
-  @ApiResponse({ status: HttpStatus.UNAUTHORIZED, description: SYS_MSG.INVALID_CREDENTIALS })
-  @ApiResponse({ status: HttpStatus.FORBIDDEN, description: 'Account locked. Returns remaining seconds in message.' })
+  @LoginDocs()
   async login(@Body() loginDto: LoginDto, @Req() request: Request) {
     return this.authService.loginUser(loginDto, request.ip ?? 'unknown');
   }
 
-  @ApiBearerAuth()
   @Post('change-password')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Change a user password' })
-  @ApiBody({ type: ChangePasswordDto })
-  @ApiResponse({ status: HttpStatus.OK, description: SYS_MSG.PASSWORD_UPDATED })
+  @ChangePasswordDocs()
   async changePassword(@Body() body: ChangePasswordDto, @Req() request: Request) {
     const user = request['user'] as { id: string };
     return this.authService.changePassword(user.id, body.oldPassword, body.newPassword);

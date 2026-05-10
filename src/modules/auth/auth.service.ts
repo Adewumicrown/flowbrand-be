@@ -83,11 +83,14 @@ export default class AuthenticationService implements OnModuleInit {
     try {
       const redisFailCount = await this.redisService.get(`fail:${loginDto.email}`);
       if (redisFailCount !== null && +redisFailCount >= MAX_FAILED_ATTEMPTS) {
-        throw new CustomHttpException(`Account locked. Please try again later.`, HttpStatus.FORBIDDEN);
+        throw new CustomHttpException(SYS_MSG.ACCOUNT_LOCKED, HttpStatus.FORBIDDEN);
       }
     } catch (err) {
       if (err instanceof CustomHttpException) throw err;
-      this.logger.warn({ event: 'redis_unavailable', detail: 'skipping Redis fast-path, falling back to DB lockout check' });
+      this.logger.warn({
+        event: 'redis_unavailable',
+        detail: 'skipping Redis fast-path, falling back to DB lockout check',
+      });
     }
 
     const user = await this.userRepository.findOne({ where: { email: loginDto.email } });
@@ -115,10 +118,7 @@ export default class AuthenticationService implements OnModuleInit {
     );
     const lock = lockResult[0];
     if (lock?.is_locked) {
-      throw new CustomHttpException(
-        `Account locked. Try again in ${lock.seconds_remaining} seconds.`,
-        HttpStatus.FORBIDDEN
-      );
+      throw new CustomHttpException(SYS_MSG.ACCOUNT_LOCKED_SECONDS(lock.seconds_remaining), HttpStatus.FORBIDDEN);
     }
 
     const isMatch = await bcrypt.compare(loginDto.password, user.password);
@@ -186,7 +186,10 @@ export default class AuthenticationService implements OnModuleInit {
         await this.redisService.set(`fail:${email}`, '1', LOCKOUT_MINUTES * 60);
       }
     } catch {
-      this.logger.warn({ event: 'redis_unavailable', detail: 'fail counter not incremented in Redis; DB counter is authoritative' });
+      this.logger.warn({
+        event: 'redis_unavailable',
+        detail: 'fail counter not incremented in Redis; DB counter is authoritative',
+      });
     }
   }
 
