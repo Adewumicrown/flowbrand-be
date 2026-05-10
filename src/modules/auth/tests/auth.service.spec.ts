@@ -4,20 +4,42 @@ import { HttpStatus } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
+import { AuthMetadata } from '../entities/auth-metadata.entity';
+import { UserSession } from '../entities/user-session.entity';
+import { RedisService } from '@modules/redis/services/redis.service';
 import AuthenticationService from '../auth.service';
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;
-  const userRepositoryMock = {
-    findOne: jest.fn(),
-    create: jest.fn(),
-    save: jest.fn(),
+
+  const userRepositoryMock = { findOne: jest.fn(), create: jest.fn(), save: jest.fn() };
+  const authMetadataRepositoryMock = { findOneBy: jest.fn(), create: jest.fn(), save: jest.fn() };
+  const userSessionRepositoryMock = { findOne: jest.fn() };
+  const jwtServiceMock = { sign: jest.fn() };
+
+  const sessionMock = { id: 'session-1', user_id: 'user-1', refresh_token: 'token', expires_at: new Date(), is_revoked: false };
+  const dataSourceMock = {
+    query: jest.fn(),
+    manager: {
+      transaction: jest.fn().mockImplementation(async (cb: (em: any) => Promise<any>) => {
+        const em = {
+          query: jest.fn().mockResolvedValue(undefined),
+          create: jest.fn().mockReturnValue(sessionMock),
+          save: jest.fn().mockResolvedValue(sessionMock),
+        };
+        return cb(em);
+      }),
+    },
   };
-  const jwtServiceMock = {
-    sign: jest.fn(),
+  const redisServiceMock = {
+    get: jest.fn().mockResolvedValue(null),
+    set: jest.fn().mockResolvedValue('OK'),
+    del: jest.fn().mockResolvedValue(1),
+    incr: jest.fn().mockResolvedValue(1),
   };
 
   beforeEach(async () => {
@@ -25,11 +47,16 @@ describe('AuthenticationService', () => {
       providers: [
         AuthenticationService,
         { provide: getRepositoryToken(User), useValue: userRepositoryMock },
+        { provide: getRepositoryToken(AuthMetadata), useValue: authMetadataRepositoryMock },
+        { provide: getRepositoryToken(UserSession), useValue: userSessionRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
+        { provide: DataSource, useValue: dataSourceMock },
+        { provide: RedisService, useValue: redisServiceMock },
       ],
     }).compile();
 
     service = module.get<AuthenticationService>(AuthenticationService);
+    await service.onModuleInit();
   });
 
   afterEach(() => {
@@ -83,6 +110,8 @@ describe('AuthenticationService', () => {
   });
 
   describe('loginUser', () => {
+    const metaMock = { id: 'meta-1', user_id: 'user-1', failed_attempts: 0, locked_until: null };
+
     it('returns an access token for valid credentials', async () => {
       const password = 'P@ssword123';
       const hashed = await bcrypt.hash(password, 10);
@@ -93,6 +122,8 @@ describe('AuthenticationService', () => {
         avatar_url: null,
         password: hashed,
       });
+      authMetadataRepositoryMock.findOneBy.mockResolvedValueOnce(metaMock);
+      dataSourceMock.query.mockResolvedValueOnce([{ is_locked: false, seconds_remaining: 0 }]);
       jwtServiceMock.sign.mockReturnValueOnce('jwt');
 
       const result = (await service.loginUser({ email: 'jane@example.com', password }, '127.0.0.1')) as Record<
@@ -101,7 +132,7 @@ describe('AuthenticationService', () => {
       >;
 
       expect(result.message).toBe(SYS_MSG.LOGIN_SUCCESSFUL);
-      expect(result.access_token).toBe('jwt');
+      expect((result.data as Record<string, unknown>).access_token).toBe('jwt');
     });
 
     it('rejects unknown emails', async () => {
@@ -120,6 +151,10 @@ describe('AuthenticationService', () => {
         avatar_url: null,
         password: hashed,
       });
+      authMetadataRepositoryMock.findOneBy.mockResolvedValueOnce(metaMock);
+      dataSourceMock.query
+        .mockResolvedValueOnce([{ is_locked: false, seconds_remaining: 0 }])
+        .mockResolvedValueOnce(undefined);
       await expect(
         service.loginUser({ email: 'jane@example.com', password: 'wrong-password' }, '127.0.0.1')
       ).rejects.toThrow(CustomHttpException);
