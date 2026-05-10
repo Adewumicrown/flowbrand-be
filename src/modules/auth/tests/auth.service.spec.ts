@@ -4,56 +4,39 @@ import { HttpStatus } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
-import { AuthMetadata } from '../entities/auth-metadata.entity';
-import { RedisService } from '@modules/redis/services/redis.service';
 import AuthenticationService from '../auth.service';
+import { LockoutService } from '../lockout.service';
+import { SessionService } from '../session.service';
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;
 
   const userRepositoryMock = { findOne: jest.fn(), create: jest.fn(), save: jest.fn() };
-  const authMetadataRepositoryMock = { findOneBy: jest.fn(), create: jest.fn(), save: jest.fn() };
   const jwtServiceMock = { sign: jest.fn() };
-
-  const sessionMock = { id: 'session-1', user_id: 'user-1', refresh_token: 'token', expires_at: new Date(), is_revoked: false };
-  const dataSourceMock = {
-    query: jest.fn(),
-    manager: {
-      transaction: jest.fn().mockImplementation(async (cb: (em: any) => Promise<any>) => {
-        const em = {
-          query: jest.fn().mockResolvedValue(undefined),
-          create: jest.fn().mockReturnValue(sessionMock),
-          save: jest.fn().mockResolvedValue(sessionMock),
-        };
-        return cb(em);
-      }),
-    },
+  const lockoutServiceMock = {
+    findOrCreate: jest.fn(),
+    isLocked: jest.fn(),
+    secondsRemaining: jest.fn(),
+    recordFailure: jest.fn(),
+    clear: jest.fn(),
   };
-  const redisServiceMock = {
-    get: jest.fn().mockResolvedValue(null),
-    set: jest.fn().mockResolvedValue('OK'),
-    del: jest.fn().mockResolvedValue(1),
-    incr: jest.fn().mockResolvedValue(1),
-  };
+  const sessionServiceMock = { create: jest.fn() };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthenticationService,
         { provide: getRepositoryToken(User), useValue: userRepositoryMock },
-        { provide: getRepositoryToken(AuthMetadata), useValue: authMetadataRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
-        { provide: DataSource, useValue: dataSourceMock },
-        { provide: RedisService, useValue: redisServiceMock },
+        { provide: LockoutService, useValue: lockoutServiceMock },
+        { provide: SessionService, useValue: sessionServiceMock },
       ],
     }).compile();
 
     service = module.get<AuthenticationService>(AuthenticationService);
-    await service.onModuleInit();
   });
 
   afterEach(() => {
@@ -119,14 +102,13 @@ describe('AuthenticationService', () => {
         avatar_url: null,
         password: hashed,
       });
-      authMetadataRepositoryMock.findOneBy.mockResolvedValueOnce(metaMock);
-      dataSourceMock.query.mockResolvedValueOnce([{ is_locked: false, seconds_remaining: 0 }]);
+      lockoutServiceMock.findOrCreate.mockResolvedValueOnce(metaMock);
+      lockoutServiceMock.isLocked.mockReturnValueOnce(false);
+      lockoutServiceMock.clear.mockResolvedValueOnce(undefined);
+      sessionServiceMock.create.mockResolvedValueOnce({ rawToken: 'raw-token', sessionId: 'session-1' });
       jwtServiceMock.sign.mockReturnValueOnce('jwt');
 
-      const result = (await service.loginUser({ email: 'jane@example.com', password }, '127.0.0.1')) as Record<
-        string,
-        unknown
-      >;
+      const result = (await service.loginUser({ email: 'jane@example.com', password })) as Record<string, unknown>;
 
       expect(result.message).toBe(SYS_MSG.LOGIN_SUCCESSFUL);
       expect((result.data as Record<string, unknown>).access_token).toBe('jwt');
@@ -134,9 +116,7 @@ describe('AuthenticationService', () => {
 
     it('rejects unknown emails', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce(null);
-      await expect(service.loginUser({ email: 'x@y.z', password: 'pass' }, '127.0.0.1')).rejects.toThrow(
-        CustomHttpException
-      );
+      await expect(service.loginUser({ email: 'x@y.z', password: 'pass' })).rejects.toThrow(CustomHttpException);
     });
 
     it('rejects bad passwords', async () => {
@@ -148,13 +128,13 @@ describe('AuthenticationService', () => {
         avatar_url: null,
         password: hashed,
       });
-      authMetadataRepositoryMock.findOneBy.mockResolvedValueOnce(metaMock);
-      dataSourceMock.query
-        .mockResolvedValueOnce([{ is_locked: false, seconds_remaining: 0 }])
-        .mockResolvedValueOnce(undefined);
-      await expect(
-        service.loginUser({ email: 'jane@example.com', password: 'wrong-password' }, '127.0.0.1')
-      ).rejects.toThrow(CustomHttpException);
+      lockoutServiceMock.findOrCreate.mockResolvedValueOnce(metaMock);
+      lockoutServiceMock.isLocked.mockReturnValueOnce(false);
+      lockoutServiceMock.recordFailure.mockResolvedValueOnce(undefined);
+
+      await expect(service.loginUser({ email: 'jane@example.com', password: 'wrong-password' })).rejects.toThrow(
+        CustomHttpException
+      );
     });
 
     it('rejects accounts without a stored password (OAuth-only)', async () => {
@@ -163,7 +143,23 @@ describe('AuthenticationService', () => {
         email: 'jane@example.com',
         password: null,
       });
-      await expect(service.loginUser({ email: 'jane@example.com', password: 'anything' }, '127.0.0.1')).rejects.toThrow(
+      await expect(service.loginUser({ email: 'jane@example.com', password: 'anything' })).rejects.toThrow(
+        CustomHttpException
+      );
+    });
+
+    it('throws FORBIDDEN when the account is locked', async () => {
+      const hashed = await bcrypt.hash('pass', 10);
+      userRepositoryMock.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'jane@example.com',
+        password: hashed,
+      });
+      lockoutServiceMock.findOrCreate.mockResolvedValueOnce(metaMock);
+      lockoutServiceMock.isLocked.mockReturnValueOnce(true);
+      lockoutServiceMock.secondsRemaining.mockReturnValueOnce(300);
+
+      await expect(service.loginUser({ email: 'jane@example.com', password: 'pass' })).rejects.toThrow(
         CustomHttpException
       );
     });

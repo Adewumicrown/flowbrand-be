@@ -28,8 +28,8 @@ export default class RegistrationController {
   @skipAuth()
   @Post('login')
   @LoginDocs()
-  async login(@Body() loginDto: LoginDto, @Req() request: Request) {
-    return this.authService.loginUser(loginDto, request.ip ?? 'unknown');
+  async login(@Body() loginDto: LoginDto) {
+    return this.authService.loginUser(loginDto);
   }
 
   @Post('change-password')
