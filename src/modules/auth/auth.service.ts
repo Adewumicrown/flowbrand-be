@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
+import authConfig from '@config/auth.config';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
@@ -11,6 +12,8 @@ import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { RedisService } from '@modules/redis/services/redis.service';
 import QueueService from '@modules/email/queue.service';
+import { LockoutService } from './lockout.service';
+import { SessionService } from './session.service';
 
 const OTP_LENGTH = 6;
 const OTP_TTL_SECONDS = 300; // 5 minutes
@@ -24,8 +27,10 @@ export default class AuthenticationService {
     private readonly userRepository: Repository<User>,
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
-    private readonly queueService: QueueService
-  ) {}
+    private readonly queueService: QueueService,
+    private readonly lockoutService: LockoutService,
+    private readonly sessionService: SessionService
+  ) { }
 
   async createNewUser(createUserDto: CreateUserDTO) {
     const existing = await this.userRepository.findOne({ where: { email: createUserDto.email } });
@@ -63,24 +68,42 @@ export default class AuthenticationService {
     };
   }
 
-  async loginUser(loginDto: LoginDto) {
+  async loginUser(loginDto: LoginDto): Promise<object> {
     const user = await this.userRepository.findOne({ where: { email: loginDto.email } });
+
     if (!user || !user.password) {
       throw new CustomHttpException(SYS_MSG.INVALID_CREDENTIALS, HttpStatus.UNAUTHORIZED);
     }
 
+    const meta = await this.lockoutService.findOrCreate(user.id);
+
+    if (this.lockoutService.isLocked(meta)) {
+      throw new CustomHttpException(
+        SYS_MSG.ACCOUNT_LOCKED_SECONDS(this.lockoutService.secondsRemaining(meta)),
+        HttpStatus.FORBIDDEN
+      );
+    }
+
     const isMatch = await bcrypt.compare(loginDto.password, user.password);
+
     if (!isMatch) {
+      await this.lockoutService.recordFailure(meta);
       throw new CustomHttpException(SYS_MSG.INVALID_CREDENTIALS, HttpStatus.UNAUTHORIZED);
     }
 
-    const access_token = this.jwtService.sign({ id: user.id, sub: user.id, email: user.email });
+    await this.lockoutService.clear(meta);
+    const { rawToken, sessionId } = await this.sessionService.create(user);
+
+    const jwtExpirySeconds = +(authConfig().jwtExpiry ?? 3600);
+    const access_token = this.jwtService.sign({ sub: user.id, id: user.id, email: user.email, sid: sessionId });
 
     return {
       status_code: HttpStatus.OK,
       message: SYS_MSG.LOGIN_SUCCESSFUL,
-      access_token,
       data: {
+        access_token,
+        refresh_token: rawToken,
+        expires_at: new Date(Date.now() + jwtExpirySeconds * 1000).toISOString(),
         user: {
           id: user.id,
           full_name: user.full_name,
