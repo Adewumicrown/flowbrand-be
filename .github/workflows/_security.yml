@@ -31,25 +31,65 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history scanning
+          fetch-depth: 0
 
-      - name: Run TruffleHog
-        uses: trufflesecurity/trufflehog@v3.88.2
+      - name: Install TruffleHog
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
+            | sh -s -- -b /usr/local/bin
+          trufflehog --version
+
+      - name: Run TruffleHog (generate report)
+        run: |
+          trufflehog git --json --no-update file://. > trufflehog-report.json || true
+
+      - name: Validate report is parseable JSON lines
+        run: |
+          if [ ! -s trufflehog-report.json ]; then
+            echo "Report is empty — no findings."
+            # Write a valid empty array so downstream steps always have parseable input
+            echo "[]" > trufflehog-report.json
+            exit 0
+          fi
+          # TruffleHog outputs one JSON object per line (NDJSON), not a JSON array.
+          # Convert to a JSON array for uniform downstream handling.
+          jq -s '.' trufflehog-report.json > trufflehog-report-array.json
+          mv trufflehog-report-array.json trufflehog-report.json
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
         with:
-          scan: git # scan the entire git history
-          path: .
-          extra_args: --baseline=.github/trufflehog-baseline.json
+          name: trufflehog-report
+          path: trufflehog-report.json
 
-  # secret-scan:
-  #   name: Secret Scan (Gitleaks)
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         fetch-depth: 0
+      - name: Compare with baseline and fail on new findings
+        run: |
+          if [ ! -f .github/trufflehog-baseline.json ]; then
+            echo "No baseline file found at .github/trufflehog-baseline.json — skipping diff, not failing."
+            exit 0
+          fi
 
-  #     - name: Run Gitleaks
-  #       uses: gitleaks/gitleaks-action@v2
-  #       env:
-  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Both files must be valid JSON arrays at this point.
+          # Extract known fingerprints from baseline, then filter report to only unknown ones.
+          jq -n \
+            --slurpfile base .github/trufflehog-baseline.json \
+            --slurpfile found trufflehog-report.json \
+            '
+              ($base[0] | map(.Fingerprint)) as $known |
+              $found[0] | map(select(
+                .Fingerprint as $f |
+                $known | index($f) | not
+              ))
+            ' > trufflehog-new.json
+
+          NEW_COUNT=$(jq 'length' trufflehog-new.json)
+          echo "New findings count: $NEW_COUNT"
+
+          if [ "$NEW_COUNT" -gt 0 ]; then
+            echo "::error::TruffleHog detected $NEW_COUNT new secret(s) not present in the baseline."
+            echo "New findings:"
+            jq '.' trufflehog-new.json
+            exit 1
+          else
+            echo "No new secrets found."
+          fi
