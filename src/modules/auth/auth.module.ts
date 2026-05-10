@@ -1,15 +1,11 @@
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import authConfig from '@config/auth.config';
-import { User } from '@modules/user/entities/user.entity';
 import RegistrationController from './auth.controller';
+import authConfig from '@config/auth.config';
 import AuthenticationService from './auth.service';
 import { LockoutService } from './lockout.service';
 import { SessionService } from './session.service';
-import { AuthMetadata } from './entities/auth-metadata.entity';
-import { UserSession } from './entities/user-session.entity';
 import type { StringValue } from 'ms';
 
 const expiry = authConfig().jwtExpiry;
@@ -17,7 +13,6 @@ const expiry = authConfig().jwtExpiry;
   controllers: [RegistrationController],
   providers: [AuthenticationService, LockoutService, SessionService],
   imports: [
-    TypeOrmModule.forFeature([User, AuthMetadata, UserSession]),
     PassportModule,
     JwtModule.register({
       global: true,
@@ -27,6 +22,6 @@ const expiry = authConfig().jwtExpiry;
       },
     }),
   ],
-  exports: [TypeOrmModule],
+  exports: [],
 })
 export class AuthModule {}
