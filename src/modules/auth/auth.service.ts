@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { randomInt } from 'crypto';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
@@ -12,7 +13,7 @@ import { RedisService } from '@modules/redis/services/redis.service';
 import QueueService from '@modules/email/queue.service';
 
 const OTP_LENGTH = 6;
-const OTP_EXPIRY_MINUTES = 10;
+const OTP_TTL_SECONDS = 300; // 5 minutes
 
 @Injectable()
 export default class AuthenticationService {
@@ -43,7 +44,7 @@ export default class AuthenticationService {
     const saved = await this.userRepository.save(user);
 
     const hashedOtp = await bcrypt.hash(user.otp_code, 10);
-    await this.redisService.set(`otp:${saved.email}`, hashedOtp, OTP_EXPIRY_MINUTES * 60);
+    await this.redisService.set(`otp:${saved.email}`, hashedOtp, OTP_TTL_SECONDS);
     await this.queueService.sendMail({
       variant: 'register-otp',
       mail: { to: saved.email, context: { otp: user.otp_code, email: saved.email } },
@@ -125,7 +126,7 @@ export default class AuthenticationService {
     await this.userRepository.save(user);
 
     const hashedOtp = await bcrypt.hash(otp, 10);
-    await this.redisService.set(`otp:${email}`, hashedOtp, OTP_EXPIRY_MINUTES * 60);
+    await this.redisService.set(`otp:${email}`, hashedOtp, OTP_TTL_SECONDS);
     await this.redisService.set(`limit:${email}`, '1', 30);
     
     await this.queueService.sendMail({
@@ -148,7 +149,7 @@ export default class AuthenticationService {
     const attemptsKey = `attempts:${email}`;
     const attempts = await this.redisService.incr(attemptsKey);
     if (attempts === 1) {
-      await this.redisService.set(attemptsKey, '1', OTP_EXPIRY_MINUTES * 60);
+      await this.redisService.set(attemptsKey, '1', OTP_TTL_SECONDS);
     }
     
     if (attempts && attempts > 5) {
@@ -196,16 +197,15 @@ export default class AuthenticationService {
       throw new CustomHttpException('Please wait before requesting another OTP', HttpStatus.TOO_MANY_REQUESTS);
     }
 
+    await this.redisService.del(`otp:${email}`);
     return this.sendOtp(email);
   }
 
   private generateOtp(): string {
-    return Math.floor(Math.random() * 10 ** OTP_LENGTH)
-      .toString()
-      .padStart(OTP_LENGTH, '0');
+    return randomInt(0, 10 ** OTP_LENGTH).toString().padStart(OTP_LENGTH, '0');
   }
 
   private computeOtpExpiry(): Date {
-    return new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+    return new Date(Date.now() + OTP_TTL_SECONDS * 1000);;
   }
 }

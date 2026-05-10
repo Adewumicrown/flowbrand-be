@@ -155,7 +155,7 @@ describe('AuthenticationService', () => {
 
       expect(result.status_code).toBe(HttpStatus.OK);
       expect(result.message).toBe('OTP sent successfully');
-      expect(redisServiceMock.set).toHaveBeenCalledWith('otp:jane@example.com', expect.any(String), 600);
+      expect(redisServiceMock.set).toHaveBeenCalledWith('otp:jane@example.com', expect.any(String), 300);
       expect(redisServiceMock.set).toHaveBeenCalledWith('limit:jane@example.com', '1', 30);
       expect(queueServiceMock.sendMail).toHaveBeenCalledWith(
         expect.objectContaining({ variant: 'register-otp', mail: expect.objectContaining({ to: 'jane@example.com' }) })
