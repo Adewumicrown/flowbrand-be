@@ -34,7 +34,7 @@ jobs:
           fetch-depth: 0 # full history scanning
 
       - name: Run TruffleHog
-        uses: trufflesecurity/trufflehog@v3
+        uses: trufflesecurity/trufflehog@v3.88.2
         with:
           scan: git # scan the entire git history
           path: .
