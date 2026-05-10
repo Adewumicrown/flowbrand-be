@@ -3,7 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import authConfig from '@config/auth.config';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
@@ -149,11 +149,15 @@ export default class AuthenticationService implements OnModuleInit {
   }
 
   private async loadOrCreateMeta(userId: string): Promise<AuthMetadata> {
-    const existing = await this.authMetadataRepository.findOneBy({ user_id: userId });
-    if (existing) return existing;
-    return this.authMetadataRepository.save(
-      this.authMetadataRepository.create({ user_id: userId, failed_attempts: 0 })
+    const [inserted] = await this.dataSource.query<AuthMetadata[]>(
+      `INSERT INTO auth_metadata (id, user_id, failed_attempts)
+       VALUES (gen_random_uuid(), $1, 0)
+       ON CONFLICT (user_id) DO NOTHING
+       RETURNING *`,
+      [userId]
     );
+    if (inserted) return inserted;
+    return this.authMetadataRepository.findOneBy({ user_id: userId });
   }
 
   private async recordFailedAttempt(metaId: string, email: string): Promise<void> {
@@ -162,9 +166,19 @@ export default class AuthenticationService implements OnModuleInit {
     // across distributed nodes.
     await this.dataSource.query(
       `UPDATE auth_metadata
-       SET failed_attempts = failed_attempts + 1,
+       SET failed_attempts = CASE
+             WHEN locked_until IS NOT NULL AND locked_until < CURRENT_TIMESTAMP
+             THEN 1
+             ELSE failed_attempts + 1
+           END,
            locked_until = CASE
-             WHEN failed_attempts + 1 >= $1
+             WHEN (
+               CASE
+                 WHEN locked_until IS NOT NULL AND locked_until < CURRENT_TIMESTAMP
+                 THEN 1
+                 ELSE failed_attempts + 1
+               END
+             ) >= $1
              THEN CURRENT_TIMESTAMP + ($2 || ' minutes')::interval
              ELSE locked_until
            END
@@ -195,6 +209,7 @@ export default class AuthenticationService implements OnModuleInit {
 
   private async createSession(user: User, metaId: string, email: string, ip: string): Promise<object> {
     const refreshToken = randomBytes(32).toString('hex');
+    const hashedRefreshToken = createHash('sha256').update(refreshToken).digest('hex');
     const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
 
     const savedSession = await this.dataSource.manager
@@ -210,7 +225,7 @@ export default class AuthenticationService implements OnModuleInit {
         );
         const session = em.create(UserSession, {
           user_id: user.id,
-          refresh_token: refreshToken,
+          refresh_token: hashedRefreshToken,
           expires_at: refreshExpiresAt,
           is_revoked: false,
         });

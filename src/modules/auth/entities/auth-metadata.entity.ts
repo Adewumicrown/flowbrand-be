@@ -6,7 +6,7 @@ export class AuthMetadata {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'uuid', nullable: false })
+  @Column({ type: 'uuid', nullable: false, unique: true })
   user_id: string;
 
   @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
