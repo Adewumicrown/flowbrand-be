@@ -38,7 +38,7 @@ jobs:
         with:
           scan: git # scan the entire git history
           path: .
-          extra_args: --baseline-path=.trufflehog-baseline.json
+          extra_args: --baseline=.github/trufflehog-baseline.json
 
   # secret-scan:
   #   name: Secret Scan (Gitleaks)
