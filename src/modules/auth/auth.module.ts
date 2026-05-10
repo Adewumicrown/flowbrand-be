@@ -4,6 +4,10 @@ import { PassportModule } from '@nestjs/passport';
 import RegistrationController from './auth.controller';
 import authConfig from '@config/auth.config';
 import AuthenticationService from './auth.service';
+import { AuthMetadata } from './entities/auth-metadata.entity';
+import { UserSession } from './entities/user-session.entity';
+import { RedisModule } from '@modules/redis/redis.module';
+import { EmailModule } from '@modules/email/email.module';
 import { LockoutService } from './lockout.service';
 import { SessionService } from './session.service';
 import type { StringValue } from 'ms';
@@ -14,6 +18,8 @@ const expiry = authConfig().jwtExpiry;
   providers: [AuthenticationService, LockoutService, SessionService],
   imports: [
     PassportModule,
+    RedisModule,
+    EmailModule,
     JwtModule.register({
       global: true,
       secret: authConfig().jwtSecret,
@@ -24,4 +30,4 @@ const expiry = authConfig().jwtExpiry;
   ],
   exports: [],
 })
-export class AuthModule {}
+export class AuthModule { }
