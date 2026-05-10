@@ -30,8 +30,6 @@ export default class AuthenticationService implements OnModuleInit {
     private readonly userRepository: Repository<User>,
     @InjectRepository(AuthMetadata)
     private readonly authMetadataRepository: Repository<AuthMetadata>,
-    @InjectRepository(UserSession)
-    private readonly userSessionRepository: Repository<UserSession>,
     private readonly jwtService: JwtService,
     private readonly dataSource: DataSource,
     private readonly redisService: RedisService
@@ -81,9 +79,15 @@ export default class AuthenticationService implements OnModuleInit {
   async loginUser(loginDto: LoginDto, ip: string): Promise<object> {
     // Fast-path: check Redis before hitting the DB. If the key exists and count >= threshold,
     // the account is locked — no need to load the user row at all.
-    const redisFailCount = await this.redisService.get(`fail:${loginDto.email}`);
-    if (redisFailCount !== null && +redisFailCount >= MAX_FAILED_ATTEMPTS) {
-      throw new CustomHttpException(`Account locked. Please try again later.`, HttpStatus.FORBIDDEN);
+    // If Redis is unavailable, swallow the error and fall through to the DB lockout check below.
+    try {
+      const redisFailCount = await this.redisService.get(`fail:${loginDto.email}`);
+      if (redisFailCount !== null && +redisFailCount >= MAX_FAILED_ATTEMPTS) {
+        throw new CustomHttpException(`Account locked. Please try again later.`, HttpStatus.FORBIDDEN);
+      }
+    } catch (err) {
+      if (err instanceof CustomHttpException) throw err;
+      this.logger.warn({ event: 'redis_unavailable', detail: 'skipping Redis fast-path, falling back to DB lockout check' });
     }
 
     const user = await this.userRepository.findOne({ where: { email: loginDto.email } });
@@ -176,9 +180,13 @@ export default class AuthenticationService implements OnModuleInit {
   }
 
   private async incrementRedisFailCounter(email: string): Promise<void> {
-    const count = await this.redisService.incr(`fail:${email}`);
-    if (count === 1) {
-      await this.redisService.set(`fail:${email}`, '1', LOCKOUT_MINUTES * 60);
+    try {
+      const count = await this.redisService.incr(`fail:${email}`);
+      if (count === 1) {
+        await this.redisService.set(`fail:${email}`, '1', LOCKOUT_MINUTES * 60);
+      }
+    } catch {
+      this.logger.warn({ event: 'redis_unavailable', detail: 'fail counter not incremented in Redis; DB counter is authoritative' });
     }
   }
 
@@ -188,10 +196,13 @@ export default class AuthenticationService implements OnModuleInit {
 
     const savedSession = await this.dataSource.manager
       .transaction(async em => {
+        // Only clear lockout if it has expired or was never set. A concurrent failed-login
+        // on another device/IP may have set locked_until moments ago — we must not erase it.
         await em.query(
           `UPDATE auth_metadata
            SET failed_attempts = 0, locked_until = NULL, last_login_at = CURRENT_TIMESTAMP
-           WHERE id = $1`,
+           WHERE id = $1
+             AND (locked_until IS NULL OR locked_until <= CURRENT_TIMESTAMP)`,
           [metaId]
         );
         const session = em.create(UserSession, {
@@ -211,7 +222,9 @@ export default class AuthenticationService implements OnModuleInit {
     await Promise.all([
       this.redisService.del(`fail:${email}`),
       this.redisService.set(`active_session:${savedSession.id}`, user.id, jwtExpirySeconds),
-    ]);
+    ]).catch(() => {
+      this.logger.warn({ event: 'redis_unavailable', detail: 'session keys not written to Redis after login' });
+    });
     this.auditLog('login_success', email, ip);
 
     const tokenExpiresAt = new Date(Date.now() + jwtExpirySeconds * 1000);

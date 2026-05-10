@@ -9,7 +9,6 @@ import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import { AuthMetadata } from '../entities/auth-metadata.entity';
-import { UserSession } from '../entities/user-session.entity';
 import { RedisService } from '@modules/redis/services/redis.service';
 import AuthenticationService from '../auth.service';
 
@@ -18,7 +17,6 @@ describe('AuthenticationService', () => {
 
   const userRepositoryMock = { findOne: jest.fn(), create: jest.fn(), save: jest.fn() };
   const authMetadataRepositoryMock = { findOneBy: jest.fn(), create: jest.fn(), save: jest.fn() };
-  const userSessionRepositoryMock = { findOne: jest.fn() };
   const jwtServiceMock = { sign: jest.fn() };
 
   const sessionMock = { id: 'session-1', user_id: 'user-1', refresh_token: 'token', expires_at: new Date(), is_revoked: false };
@@ -48,7 +46,6 @@ describe('AuthenticationService', () => {
         AuthenticationService,
         { provide: getRepositoryToken(User), useValue: userRepositoryMock },
         { provide: getRepositoryToken(AuthMetadata), useValue: authMetadataRepositoryMock },
-        { provide: getRepositoryToken(UserSession), useValue: userSessionRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
         { provide: DataSource, useValue: dataSourceMock },
         { provide: RedisService, useValue: redisServiceMock },
