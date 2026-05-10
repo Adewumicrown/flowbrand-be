@@ -9,7 +9,7 @@ import { User } from '@modules/user/entities/user.entity';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { RedisService } from '@modules/redis/services/redis.service';
-import { EmailService } from '@modules/email/email.service';
+import QueueService from '@modules/email/queue.service';
 
 const OTP_LENGTH = 6;
 const OTP_EXPIRY_MINUTES = 10;
@@ -21,7 +21,7 @@ export default class AuthenticationService {
     private readonly userRepository: Repository<User>,
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
-    private readonly emailService: EmailService
+    private readonly queueService: QueueService
   ) {}
 
   async createNewUser(createUserDto: CreateUserDTO) {
@@ -44,7 +44,10 @@ export default class AuthenticationService {
 
     const hashedOtp = await bcrypt.hash(user.otp_code, 10);
     await this.redisService.set(`otp:${saved.email}`, hashedOtp, OTP_EXPIRY_MINUTES * 60);
-    await this.emailService.sendUserEmailConfirmationOtp(saved.email, user.otp_code);
+    await this.queueService.sendMail({
+      variant: 'register-otp',
+      mail: { to: saved.email, context: { otp: user.otp_code, email: saved.email } },
+    });
 
     const access_token = this.jwtService.sign({ id: saved.id, sub: saved.id, email: saved.email });
 
@@ -125,7 +128,10 @@ export default class AuthenticationService {
     await this.redisService.set(`otp:${email}`, hashedOtp, OTP_EXPIRY_MINUTES * 60);
     await this.redisService.set(`limit:${email}`, '1', 30);
     
-    await this.emailService.sendUserEmailConfirmationOtp(email, otp);
+    await this.queueService.sendMail({
+      variant: 'register-otp',
+      mail: { to: email, context: { otp, email } },
+    });
 
     return {
       status_code: HttpStatus.OK,

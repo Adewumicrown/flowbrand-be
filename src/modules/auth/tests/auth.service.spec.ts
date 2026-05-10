@@ -8,7 +8,7 @@ import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import { RedisService } from '@modules/redis/services/redis.service';
-import { EmailService } from '@modules/email/email.service';
+import QueueService from '@modules/email/queue.service';
 import AuthenticationService from '../auth.service';
 
 describe('AuthenticationService', () => {
@@ -23,8 +23,8 @@ describe('AuthenticationService', () => {
     incr: jest.fn().mockResolvedValue(1),
     exists: jest.fn().mockResolvedValue(0),
   };
-  const emailServiceMock = {
-    sendUserEmailConfirmationOtp: jest.fn().mockResolvedValue(undefined),
+  const queueServiceMock = {
+    sendMail: jest.fn().mockResolvedValue({ jobId: 'mock-job' }),
   };
 
   beforeEach(async () => {
@@ -34,7 +34,7 @@ describe('AuthenticationService', () => {
         { provide: getRepositoryToken(User), useValue: userRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
         { provide: RedisService, useValue: redisServiceMock },
-        { provide: EmailService, useValue: emailServiceMock },
+        { provide: QueueService, useValue: queueServiceMock },
       ],
     }).compile();
 
@@ -85,9 +85,8 @@ describe('AuthenticationService', () => {
       expect(created.auth_provider).toBe('email');
       expect(created.otp_code).toMatch(/^\d{6}$/);
       expect(created.expires_at).toBeInstanceOf(Date);
-      expect(emailServiceMock.sendUserEmailConfirmationOtp).toHaveBeenCalledWith(
-        dto.email,
-        expect.stringMatching(/^\d{6}$/)
+      expect(queueServiceMock.sendMail).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'register-otp', mail: expect.objectContaining({ to: dto.email }) })
       );
     });
 
@@ -158,9 +157,8 @@ describe('AuthenticationService', () => {
       expect(result.message).toBe('OTP sent successfully');
       expect(redisServiceMock.set).toHaveBeenCalledWith('otp:jane@example.com', expect.any(String), 600);
       expect(redisServiceMock.set).toHaveBeenCalledWith('limit:jane@example.com', '1', 30);
-      expect(emailServiceMock.sendUserEmailConfirmationOtp).toHaveBeenCalledWith(
-        'jane@example.com',
-        expect.stringMatching(/^\d{6}$/)
+      expect(queueServiceMock.sendMail).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'register-otp', mail: expect.objectContaining({ to: 'jane@example.com' }) })
       );
     });
 
@@ -238,14 +236,14 @@ describe('AuthenticationService', () => {
       const result = await service.resendOtp('jane@example.com');
 
       expect(result.status_code).toBe(HttpStatus.OK);
-      expect(emailServiceMock.sendUserEmailConfirmationOtp).toHaveBeenCalled();
+      expect(queueServiceMock.sendMail).toHaveBeenCalled();
     });
 
     it('throws 429 when cooldown key still exists in Redis', async () => {
       redisServiceMock.exists.mockResolvedValueOnce(1);
 
       await expect(service.resendOtp('jane@example.com')).rejects.toThrow(CustomHttpException);
-      expect(emailServiceMock.sendUserEmailConfirmationOtp).not.toHaveBeenCalled();
+      expect(queueServiceMock.sendMail).not.toHaveBeenCalled();
     });
   });
 
