@@ -14,6 +14,8 @@ import QueueService from '@modules/email/queue.service';
 
 const OTP_LENGTH = 6;
 const OTP_TTL_SECONDS = 300; // 5 minutes
+const OTP_RESEND_COOLDOWN_SECONDS = 30;
+const MAX_OTP_ATTEMPTS = 5;
 
 @Injectable()
 export default class AuthenticationService {
@@ -32,23 +34,17 @@ export default class AuthenticationService {
     }
 
     const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
-    const user = this.userRepository.create({
-      email: createUserDto.email,
-      full_name: createUserDto.full_name,
-      country: createUserDto.country ?? null,
-      password: hashedPassword,
-      auth_provider: 'email',
-      otp_code: this.generateOtp(),
-      expires_at: this.computeOtpExpiry(),
-    });
-    const saved = await this.userRepository.save(user);
+    const saved = await this.userRepository.save(
+      this.userRepository.create({
+        email: createUserDto.email,
+        full_name: createUserDto.full_name,
+        country: createUserDto.country ?? null,
+        password: hashedPassword,
+        auth_provider: 'email',
+      })
+    );
 
-    const hashedOtp = await bcrypt.hash(user.otp_code, 10);
-    await this.redisService.set(`otp:${saved.email}`, hashedOtp, OTP_TTL_SECONDS);
-    await this.queueService.sendMail({
-      variant: 'register-otp',
-      mail: { to: saved.email, context: { otp: user.otp_code, email: saved.email } },
-    });
+    await this.issueOtp(saved.email);
 
     const access_token = this.jwtService.sign({ id: saved.id, sub: saved.id, email: saved.email });
 
@@ -108,76 +104,65 @@ export default class AuthenticationService {
     user.password = await bcrypt.hash(newPassword, 10);
     await this.userRepository.save(user);
 
-    return {
-      status_code: HttpStatus.OK,
-      message: SYS_MSG.PASSWORD_UPDATED,
-    };
+    return { status_code: HttpStatus.OK, message: SYS_MSG.PASSWORD_UPDATED };
   }
 
   async sendOtp(email: string) {
-    const user = await this.userRepository.findOne({ where: { email } });
-    if (!user) {
-      throw new CustomHttpException(SYS_MSG.USER_NOT_FOUND, HttpStatus.NOT_FOUND);
+    if (await this.redisService.exists(`limit:${email}`)) {
+      throw new CustomHttpException(SYS_MSG.OTP_COOLDOWN, HttpStatus.TOO_MANY_REQUESTS);
     }
 
-    const otp = this.generateOtp();
-    user.otp_code = otp;
-    user.expires_at = this.computeOtpExpiry();
-    await this.userRepository.save(user);
+    const user = await this.userRepository.findOne({ where: { email } });
+    // Silently succeed for unknown emails — prevents account enumeration
+    if (!user) return { status_code: HttpStatus.OK, message: SYS_MSG.OTP_SENT };
 
-    const hashedOtp = await bcrypt.hash(otp, 10);
-    await this.redisService.set(`otp:${email}`, hashedOtp, OTP_TTL_SECONDS);
-    await this.redisService.set(`limit:${email}`, '1', 30);
-    
-    await this.queueService.sendMail({
-      variant: 'register-otp',
-      mail: { to: email, context: { otp, email } },
-    });
-
-    return {
-      status_code: HttpStatus.OK,
-      message: 'OTP sent successfully',
-    };
+    await this.issueOtp(email);
+    return { status_code: HttpStatus.OK, message: SYS_MSG.OTP_SENT };
   }
 
   async verifyOtp(email: string, otp: string) {
     const user = await this.userRepository.findOne({ where: { email } });
     if (!user) {
-      throw new CustomHttpException(SYS_MSG.USER_NOT_FOUND, HttpStatus.NOT_FOUND);
+      throw new CustomHttpException(SYS_MSG.INVALID_OTP, HttpStatus.BAD_REQUEST);
+    }
+
+    // Check OTP existence before burning an attempt — expired OTPs should not penalise the user
+    const hashedOtp = await this.redisService.get(`otp:${email}`);
+    if (!hashedOtp) {
+      throw new CustomHttpException(SYS_MSG.OTP_EXPIRED, HttpStatus.BAD_REQUEST);
     }
 
     const attemptsKey = `attempts:${email}`;
     const attempts = await this.redisService.incr(attemptsKey);
     if (attempts === 1) {
-      await this.redisService.set(attemptsKey, '1', OTP_TTL_SECONDS);
+      // Use expire (not set) to avoid resetting the counter value in a race
+      await this.redisService.expire(attemptsKey, OTP_TTL_SECONDS);
     }
-    
-    if (attempts && attempts > 5) {
-      throw new CustomHttpException('Too many attempts. Please request a new OTP.', HttpStatus.TOO_MANY_REQUESTS);
-    }
-
-    const hashedOtp = await this.redisService.get(`otp:${email}`);
-    if (!hashedOtp) {
-      throw new CustomHttpException('OTP has expired or does not exist', HttpStatus.BAD_REQUEST);
+    if ((attempts ?? 0) > MAX_OTP_ATTEMPTS) {
+      throw new CustomHttpException(SYS_MSG.TOO_MANY_OTP_ATTEMPTS, HttpStatus.TOO_MANY_REQUESTS);
     }
 
     const isMatch = await bcrypt.compare(otp, hashedOtp);
     if (!isMatch) {
-      throw new CustomHttpException('Invalid OTP', HttpStatus.BAD_REQUEST);
+      throw new CustomHttpException(SYS_MSG.INVALID_OTP, HttpStatus.BAD_REQUEST);
     }
 
     user.is_verified = true;
+    user.otp_code = null;
+    user.expires_at = null;
     await this.userRepository.save(user);
 
-    await this.redisService.del(`otp:${email}`);
-    await this.redisService.del(`attempts:${email}`);
-    await this.redisService.del(`limit:${email}`);
+    await Promise.all([
+      this.redisService.del(`otp:${email}`),
+      this.redisService.del(`attempts:${email}`),
+      this.redisService.del(`limit:${email}`),
+    ]);
 
     const access_token = this.jwtService.sign({ id: user.id, sub: user.id, email: user.email });
 
     return {
       status_code: HttpStatus.OK,
-      message: 'Email verified successfully',
+      message: SYS_MSG.EMAIL_VERIFIED,
       access_token,
       data: {
         user: {
@@ -185,27 +170,41 @@ export default class AuthenticationService {
           full_name: user.full_name,
           email: user.email,
           avatar_url: user.avatar_url,
-          is_verified: user.is_verified,
+          is_verified: true,
         },
       },
     };
   }
 
   async resendOtp(email: string) {
-    const hasLimit = await this.redisService.exists(`limit:${email}`);
-    if (hasLimit) {
-      throw new CustomHttpException('Please wait before requesting another OTP', HttpStatus.TOO_MANY_REQUESTS);
+    if (await this.redisService.exists(`limit:${email}`)) {
+      throw new CustomHttpException(SYS_MSG.OTP_COOLDOWN, HttpStatus.TOO_MANY_REQUESTS);
     }
 
-    await this.redisService.del(`otp:${email}`);
-    return this.sendOtp(email);
+    // Clear stale OTP and attempts so the fresh code starts with a clean slate
+    await Promise.all([this.redisService.del(`otp:${email}`), this.redisService.del(`attempts:${email}`)]);
+
+    const user = await this.userRepository.findOne({ where: { email } });
+    if (!user) return { status_code: HttpStatus.OK, message: SYS_MSG.OTP_SENT };
+
+    await this.issueOtp(email);
+    return { status_code: HttpStatus.OK, message: SYS_MSG.OTP_SENT };
+  }
+
+  // Generates a fresh OTP, stores the bcrypt hash in Redis, and queues the email.
+  // The plaintext OTP is never persisted to the database.
+  private async issueOtp(email: string): Promise<void> {
+    const otp = this.generateOtp();
+    const hashedOtp = await bcrypt.hash(otp, 10);
+    await this.redisService.set(`otp:${email}`, hashedOtp, OTP_TTL_SECONDS);
+    await this.redisService.set(`limit:${email}`, '1', OTP_RESEND_COOLDOWN_SECONDS);
+    await this.queueService.sendMail({
+      variant: 'register-otp',
+      mail: { to: email, context: { otp, email } },
+    });
   }
 
   private generateOtp(): string {
     return randomInt(0, 10 ** OTP_LENGTH).toString().padStart(OTP_LENGTH, '0');
-  }
-
-  private computeOtpExpiry(): Date {
-    return new Date(Date.now() + OTP_TTL_SECONDS * 1000);;
   }
 }

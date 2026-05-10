@@ -21,7 +21,8 @@ describe('AuthenticationService', () => {
     set: jest.fn().mockResolvedValue('OK'),
     del: jest.fn().mockResolvedValue(1),
     incr: jest.fn().mockResolvedValue(1),
-    exists: jest.fn().mockResolvedValue(0),
+    exists: jest.fn().mockResolvedValue(false),
+    expire: jest.fn().mockResolvedValue(undefined),
   };
   const queueServiceMock = {
     sendMail: jest.fn().mockResolvedValue({ jobId: 'mock-job' }),
@@ -59,7 +60,7 @@ describe('AuthenticationService', () => {
       country: 'Nigeria',
     };
 
-    it('creates a user when none exists with that email', async () => {
+    it('creates a user and dispatches OTP email — no plaintext OTP in DB', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce(null);
       userRepositoryMock.create.mockImplementation(input => input);
       userRepositoryMock.save.mockResolvedValueOnce({
@@ -81,12 +82,25 @@ describe('AuthenticationService', () => {
         email: dto.email,
         avatar_url: null,
       });
+
+      // otp_code and expires_at must NOT be written to the DB
       const created = userRepositoryMock.create.mock.calls[0][0];
       expect(created.auth_provider).toBe('email');
-      expect(created.otp_code).toMatch(/^\d{6}$/);
-      expect(created.expires_at).toBeInstanceOf(Date);
+      expect(created.otp_code).toBeUndefined();
+      expect(created.expires_at).toBeUndefined();
+
+      // OTP hash must be stored in Redis
+      expect(redisServiceMock.set).toHaveBeenCalledWith('otp:jane@example.com', expect.any(String), 300);
+
+      // Email must be dispatched with a 6-digit OTP
       expect(queueServiceMock.sendMail).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'register-otp', mail: expect.objectContaining({ to: dto.email }) })
+        expect.objectContaining({
+          variant: 'register-otp',
+          mail: expect.objectContaining({
+            to: dto.email,
+            context: expect.objectContaining({ otp: expect.stringMatching(/^\d{6}$/) }),
+          }),
+        })
       );
     });
 
@@ -145,26 +159,35 @@ describe('AuthenticationService', () => {
   // ─── sendOtp ─────────────────────────────────────────────────────────────
 
   describe('sendOtp', () => {
-    const user = { id: 'user-1', email: 'jane@example.com', otp_code: '', expires_at: new Date() };
+    const user = { id: 'user-1', email: 'jane@example.com' };
 
-    it('sends OTP, stores hash in Redis and triggers email', async () => {
+    it('sends OTP and stores hash in Redis — no plaintext in DB', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce({ ...user });
-      userRepositoryMock.save.mockResolvedValueOnce(undefined);
 
       const result = await service.sendOtp('jane@example.com');
 
       expect(result.status_code).toBe(HttpStatus.OK);
-      expect(result.message).toBe('OTP sent successfully');
+      expect(result.message).toBe(SYS_MSG.OTP_SENT);
       expect(redisServiceMock.set).toHaveBeenCalledWith('otp:jane@example.com', expect.any(String), 300);
       expect(redisServiceMock.set).toHaveBeenCalledWith('limit:jane@example.com', '1', 30);
+      expect(userRepositoryMock.save).not.toHaveBeenCalled();
       expect(queueServiceMock.sendMail).toHaveBeenCalledWith(
         expect.objectContaining({ variant: 'register-otp', mail: expect.objectContaining({ to: 'jane@example.com' }) })
       );
     });
 
-    it('throws 404 when user does not exist', async () => {
+    it('returns 200 silently for unknown emails — prevents enumeration', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce(null);
-      await expect(service.sendOtp('nobody@example.com')).rejects.toThrow(CustomHttpException);
+
+      const result = await service.sendOtp('nobody@example.com');
+
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(queueServiceMock.sendMail).not.toHaveBeenCalled();
+    });
+
+    it('throws 429 when cooldown key exists', async () => {
+      redisServiceMock.exists.mockResolvedValueOnce(true);
+      await expect(service.sendOtp('jane@example.com')).rejects.toThrow(CustomHttpException);
     });
   });
 
@@ -173,42 +196,51 @@ describe('AuthenticationService', () => {
   describe('verifyOtp', () => {
     const user = { id: 'user-1', email: 'jane@example.com', full_name: 'Jane', avatar_url: null, is_verified: false };
 
-    it('verifies a valid OTP, marks user as verified and returns a token', async () => {
+    it('verifies a valid OTP, marks user verified, clears Redis keys and DB OTP fields', async () => {
       const otp = '123456';
       const hashedOtp = await bcrypt.hash(otp, 10);
 
       userRepositoryMock.findOne.mockResolvedValueOnce({ ...user });
-      redisServiceMock.incr.mockResolvedValueOnce(1);
       redisServiceMock.get.mockResolvedValueOnce(hashedOtp);
+      redisServiceMock.incr.mockResolvedValueOnce(1);
       userRepositoryMock.save.mockResolvedValueOnce(undefined);
       jwtServiceMock.sign.mockReturnValueOnce('jwt');
 
       const result = await service.verifyOtp('jane@example.com', otp);
 
       expect(result.status_code).toBe(HttpStatus.OK);
-      expect(result.message).toBe('Email verified successfully');
+      expect(result.message).toBe(SYS_MSG.EMAIL_VERIFIED);
       expect(result.access_token).toBe('jwt');
+
+      // DB otp_code and expires_at must be cleared
+      const saved = userRepositoryMock.save.mock.calls[0][0];
+      expect(saved.otp_code).toBeNull();
+      expect(saved.expires_at).toBeNull();
+      expect(saved.is_verified).toBe(true);
+
       expect(redisServiceMock.del).toHaveBeenCalledWith('otp:jane@example.com');
       expect(redisServiceMock.del).toHaveBeenCalledWith('attempts:jane@example.com');
       expect(redisServiceMock.del).toHaveBeenCalledWith('limit:jane@example.com');
     });
 
-    it('throws 404 when user does not exist', async () => {
+    it('throws 400 for unknown email — same shape as bad OTP, prevents enumeration', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce(null);
       await expect(service.verifyOtp('nobody@example.com', '123456')).rejects.toThrow(CustomHttpException);
     });
 
-    it('throws 429 when attempt count exceeds 5', async () => {
+    it('throws 400 when OTP has expired before burning an attempt', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce({ ...user });
-      redisServiceMock.incr.mockResolvedValueOnce(6);
+      redisServiceMock.get.mockResolvedValueOnce(null); // OTP missing/expired
 
       await expect(service.verifyOtp('jane@example.com', '123456')).rejects.toThrow(CustomHttpException);
+      expect(redisServiceMock.incr).not.toHaveBeenCalled(); // no attempt burned
     });
 
-    it('throws 400 when OTP has expired or does not exist in Redis', async () => {
+    it('throws 429 when attempt count exceeds limit', async () => {
+      const hashedOtp = await bcrypt.hash('123456', 10);
       userRepositoryMock.findOne.mockResolvedValueOnce({ ...user });
-      redisServiceMock.incr.mockResolvedValueOnce(1);
-      redisServiceMock.get.mockResolvedValueOnce(null);
+      redisServiceMock.get.mockResolvedValueOnce(hashedOtp);
+      redisServiceMock.incr.mockResolvedValueOnce(6);
 
       await expect(service.verifyOtp('jane@example.com', '123456')).rejects.toThrow(CustomHttpException);
     });
@@ -216,33 +248,48 @@ describe('AuthenticationService', () => {
     it('throws 400 when OTP does not match', async () => {
       const hashedOtp = await bcrypt.hash('654321', 10);
       userRepositoryMock.findOne.mockResolvedValueOnce({ ...user });
-      redisServiceMock.incr.mockResolvedValueOnce(1);
       redisServiceMock.get.mockResolvedValueOnce(hashedOtp);
+      redisServiceMock.incr.mockResolvedValueOnce(1);
 
       await expect(service.verifyOtp('jane@example.com', '999999')).rejects.toThrow(CustomHttpException);
+    });
+
+    it('uses expire (not set) for atomic TTL on first attempt', async () => {
+      const hashedOtp = await bcrypt.hash('123456', 10);
+      userRepositoryMock.findOne.mockResolvedValueOnce({ ...user });
+      redisServiceMock.get.mockResolvedValueOnce(hashedOtp);
+      redisServiceMock.incr.mockResolvedValueOnce(1);
+      jwtServiceMock.sign.mockReturnValueOnce('jwt');
+      userRepositoryMock.save.mockResolvedValueOnce(undefined);
+
+      await service.verifyOtp('jane@example.com', '123456');
+
+      expect(redisServiceMock.expire).toHaveBeenCalledWith('attempts:jane@example.com', 300);
+      expect(redisServiceMock.set).not.toHaveBeenCalledWith('attempts:jane@example.com', expect.anything(), expect.anything());
     });
   });
 
   // ─── resendOtp ────────────────────────────────────────────────────────────
 
   describe('resendOtp', () => {
-    const user = { id: 'user-1', email: 'jane@example.com', otp_code: '', expires_at: new Date() };
+    const user = { id: 'user-1', email: 'jane@example.com' };
 
-    it('resends OTP when cooldown has expired', async () => {
-      redisServiceMock.exists.mockResolvedValueOnce(0);
+    it('clears old OTP and attempts then issues a fresh code', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce({ ...user });
-      userRepositoryMock.save.mockResolvedValueOnce(undefined);
 
       const result = await service.resendOtp('jane@example.com');
 
       expect(result.status_code).toBe(HttpStatus.OK);
+      expect(redisServiceMock.del).toHaveBeenCalledWith('otp:jane@example.com');
+      expect(redisServiceMock.del).toHaveBeenCalledWith('attempts:jane@example.com');
       expect(queueServiceMock.sendMail).toHaveBeenCalled();
     });
 
-    it('throws 429 when cooldown key still exists in Redis', async () => {
-      redisServiceMock.exists.mockResolvedValueOnce(1);
+    it('throws 429 when cooldown key exists — does not clear existing OTP', async () => {
+      redisServiceMock.exists.mockResolvedValueOnce(true);
 
       await expect(service.resendOtp('jane@example.com')).rejects.toThrow(CustomHttpException);
+      expect(redisServiceMock.del).not.toHaveBeenCalled();
       expect(queueServiceMock.sendMail).not.toHaveBeenCalled();
     });
   });
