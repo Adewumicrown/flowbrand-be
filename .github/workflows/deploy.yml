@@ -1,52 +1,9 @@
-name: Deploy Flowbrand BE
-
-on:
-  push:
-    branches:
-      - dev
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install dependencies
-        run: yarn install --ignore-engines
-
-      - name: Build
-        run: yarn build
-
-      - name: Create .env file
-        run: echo "${{ secrets.ENV_FILE }}" > .env
-
-      - name: Install sshpass
-        run: sudo apt-get install -y sshpass
-
-      - name: Prepare server directory
-        run: |
-          sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh \
-            -p ${{ secrets.SERVER_PORT }} \
-            -o StrictHostKeyChecking=no \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
-            sudo mkdir -p /var/www/flowbrand-be
-            sudo chown -R $USER:$USER /var/www/flowbrand-be
-            sudo chmod -R 755 /var/www/flowbrand-be
-          EOF
-
-      - name: Copy files to server
+- name: Copy files to server
         run: |
           sshpass -p "${{ secrets.SERVER_PASSWORD }}" rsync -avz --delete \
             -e "ssh -p ${{ secrets.SERVER_PORT }} -o StrictHostKeyChecking=no" \
             dist/ package.json yarn.lock .env \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/var/www/flowbrand-be/
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:~/flowbrand-be/
 
       - name: Bootstrap server & start app
         run: |
@@ -54,6 +11,9 @@ jobs:
             -p ${{ secrets.SERVER_PORT }} \
             -o StrictHostKeyChecking=no \
             ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+
+            mkdir -p ~/flowbrand-be
+            cd ~/flowbrand-be
 
             # Install Node 22 if not present
             if ! command -v node &> /dev/null; then
@@ -71,46 +31,14 @@ jobs:
               npm install -g pm2
             fi
 
-            # Install Nginx if not present
-            if ! command -v nginx &> /dev/null; then
-              sudo apt install -y nginx
-              sudo systemctl enable nginx
-            fi
-
             # Install production dependencies
-            cd /var/www/flowbrand-be
             yarn install --production --ignore-engines
-
-            # Configure Nginx if not already done
-            if [ ! -f /etc/nginx/sites-available/flowbrand-be ]; then
-              sudo tee /etc/nginx/sites-available/flowbrand-be > /dev/null <<'NGINX'
-            server {
-                listen 80;
-                server_name _;
-                client_max_body_size 20M;
-                location / {
-                    proxy_pass http://localhost:3008;
-                    proxy_http_version 1.1;
-                    proxy_set_header Upgrade $http_upgrade;
-                    proxy_set_header Connection 'upgrade';
-                    proxy_set_header Host $host;
-                    proxy_set_header X-Real-IP $remote_addr;
-                    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                    proxy_set_header X-Forwarded-Proto $scheme;
-                    proxy_cache_bypass $http_upgrade;
-                }
-            }
-            NGINX
-              sudo ln -sf /etc/nginx/sites-available/flowbrand-be /etc/nginx/sites-enabled/
-              sudo nginx -t && sudo systemctl restart nginx
-            fi
 
             # Start or restart app
             if pm2 list | grep -q flowbrand-be; then
               pm2 restart flowbrand-be
             else
-              pm2 start /var/www/flowbrand-be/dist/src/main.js --name flowbrand-be
+              pm2 start ~/flowbrand-be/dist/src/main.js --name flowbrand-be
               pm2 save
-              pm2 startup | tail -1 | sudo bash
             fi
           EOF
