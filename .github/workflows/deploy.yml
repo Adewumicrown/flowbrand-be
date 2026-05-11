@@ -27,24 +27,23 @@ jobs:
       - name: Create .env file
         run: echo "${{ secrets.ENV_FILE }}" > .env
 
+      - name: Install sshpass
+        run: sudo apt-get install -y sshpass
+
       - name: Copy files to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          password: ${{ secrets.SERVER_PASSWORD }}
-          port: ${{ secrets.SERVER_PORT }}
-          source: 'dist/,package.json,yarn.lock,.env'
-          target: '/var/www/flowbrand-be'
+        run: |
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" rsync -avz --delete \
+            -e "ssh -p ${{ secrets.SERVER_PORT }} -o StrictHostKeyChecking=no" \
+            dist/ package.json yarn.lock .env \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/var/www/flowbrand-be/
 
       - name: Bootstrap server & start app
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          password: ${{ secrets.SERVER_PASSWORD }}
-          port: ${{ secrets.SERVER_PORT }}
-          script: |
+        run: |
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh \
+            -p ${{ secrets.SERVER_PORT }} \
+            -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+
             # Install Node 22 if not present
             if ! command -v node &> /dev/null; then
               curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
@@ -67,19 +66,17 @@ jobs:
               sudo systemctl enable nginx
             fi
 
-            # Install app dependencies
+            # Install production dependencies
             cd /var/www/flowbrand-be
             yarn install --production --ignore-engines
 
             # Configure Nginx if not already done
             if [ ! -f /etc/nginx/sites-available/flowbrand-be ]; then
-              sudo tee /etc/nginx/sites-available/flowbrand-be > /dev/null <<'EOF'
+              sudo tee /etc/nginx/sites-available/flowbrand-be > /dev/null <<'NGINX'
             server {
                 listen 80;
                 server_name _;
-
                 client_max_body_size 20M;
-
                 location / {
                     proxy_pass http://localhost:3008;
                     proxy_http_version 1.1;
@@ -92,16 +89,17 @@ jobs:
                     proxy_cache_bypass $http_upgrade;
                 }
             }
-            EOF
+            NGINX
               sudo ln -sf /etc/nginx/sites-available/flowbrand-be /etc/nginx/sites-enabled/
               sudo nginx -t && sudo systemctl restart nginx
             fi
 
-            # Start or restart the app with PM2
+            # Start or restart app
             if pm2 list | grep -q flowbrand-be; then
               pm2 restart flowbrand-be
             else
-              pm2 start dist/src/main.js --name flowbrand-be
+              pm2 start /var/www/flowbrand-be/dist/src/main.js --name flowbrand-be
               pm2 save
               pm2 startup | tail -1 | sudo bash
             fi
+          EOF
